@@ -32,7 +32,6 @@ elif [[ $DATASET_NAME == "diode" ]]; then
     IMG_SIZE=256
     SIGMA_MAX=20.0
     SIGMA_MIN=0.0005
-
     EXP="diode${IMG_SIZE}_${NUM_CH}d"
     SAVE_ITER=20000
 fi
