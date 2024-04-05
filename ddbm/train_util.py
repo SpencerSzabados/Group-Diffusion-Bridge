@@ -9,7 +9,7 @@ import torch as th
 import torch.distributed as dist
 from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 from torch.optim import RAdam
-
+import torchvision
 from . import dist_util, logger
 from .fp16_util import MixedPrecisionTrainer
 from .nn import update_ema
@@ -31,9 +31,6 @@ import glob
 # We found that the lg_loss_scale quickly climbed to
 # 20-21 within the first ~1K steps of training.
 INITIAL_LOG_LOSS_SCALE = 20.0
-
-import wandb
-
 class TrainLoop:
     def __init__(
         self,
@@ -143,7 +140,6 @@ class TrainLoop:
 
         self.augment = augment_pipe
     
-
     def _load_and_sync_parameters(self):
         resume_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
         
@@ -200,14 +196,11 @@ class TrainLoop:
     def preprocess(self, x):
         if x.shape[1] == 3:
             x =  x * 2 - 1
-
-            
-                
         return x
 
     def run_loop(self):
         while True:
-            for batch, cond, _ in self.data:
+            for batch, cond, _, mask in self.data:
                 if not (not self.lr_anneal_steps or self.step < self.total_training_steps):
                     # Save the last checkpoint if it wasn't already saved.
                     if (self.step - 1) % self.save_interval != 0:
@@ -216,12 +209,24 @@ class TrainLoop:
                 # scale to [-1, 1]
                 
                 batch = self.preprocess(batch)
+
+                # # TODO: Remove - this code is just for validating dataloader and masking operations
+                # grid_img = torchvision.utils.make_grid(batch[0:10], nrow = 10, normalize = True)
+                # torchvision.utils.save_image(grid_img, f"tmp_imgs/batch_sample.pdf")
+
+                # Mask input if mask exists
+                if mask is not None or mask > 0:
+                    batch = batch*mask
+                    cond = cond*mask
+
+                # # TODO: Remove - this code is just for validating dataloader and masking operations
+                # grid_img = torchvision.utils.make_grid(batch[0:10], nrow = 10, normalize = True)
+                # torchvision.utils.save_image(grid_img, f"tmp_imgs/masked_batch_sample.pdf")
                     
                 if self.augment is not None:
                     batch, _ = self.augment(batch)
                 if isinstance(cond, th.Tensor) and batch.ndim == cond.ndim:
                     xT = self.preprocess(cond)
-                    
                     cond = {'xT': xT}
                 else:
                     cond['xT'] = self.preprocess(cond['xT'])
@@ -229,9 +234,6 @@ class TrainLoop:
                 took_step = self.run_step(batch, cond)
                 if took_step and self.step % self.log_interval == 0:
                     logs = logger.dumpkvs()
-
-                    if dist.get_rank() == 0:
-                        wandb.log(logs, step=self.step)
                         
                 if took_step and self.step % self.save_interval == 0:
                     self.save()
@@ -248,14 +250,9 @@ class TrainLoop:
                     self.run_test_step(test_batch, test_cond)
                     logs = logger.dumpkvs()
 
-                    if dist.get_rank() == 0:
-                        wandb.log(logs, step=self.step)
-                
-
                 if took_step and self.step % self.save_interval_for_preemption == 0:
                     self.save(for_preemption=True)
         
-
     def run_step(self, batch, cond):
         self.forward_backward(batch, cond)
         took_step = self.mp_trainer.optimize(self.opt)
@@ -330,8 +327,7 @@ class TrainLoop:
             freq_states = list(glob.glob(os.path.join(get_blob_logdir(), wc)))
             if len(freq_states) > 3:
                 earliest = min(freq_states, key=lambda x: x.split('_')[-1].split('.')[0])
-                os.remove(earliest)
-                    
+                os.remove(earliest)     
 
         # if dist.get_rank() == 0 and for_preemption:
         #     maybe_delete_earliest(get_blob_logdir())
@@ -369,7 +365,6 @@ class TrainLoop:
         # loads model at step N, but opt/ema state isn't saved for step N.
         save_checkpoint(0, self.mp_trainer.master_params)
         dist.barrier()
-
 
 
 def parse_resume_step_from_filename(filename):

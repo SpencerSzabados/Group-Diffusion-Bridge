@@ -181,10 +181,6 @@ class DistInfiniteBatchSampler(InfiniteBatchSampler):
         return local_indices
 
 
-
-
-
-
 def load_data(
     data_dir,
     dataset,
@@ -197,14 +193,11 @@ def load_data(
 ):
   # Compute batch size for this worker.
   root = data_dir
-  
       
   if dataset == 'edges2handbags':
-     
     from .aligned_dataset import EdgesDataset
     trainset = EdgesDataset(dataroot=root, train=True, img_size= image_size,
                                 random_crop=True, random_flip=True)
-
     valset = EdgesDataset(dataroot=root, train=True, img_size= image_size,
                                 random_crop=False, random_flip=False)
     if include_test:
@@ -212,19 +205,20 @@ def load_data(
                                 random_crop=False, random_flip=False)
 
   elif dataset == 'diode':
-
     from .aligned_dataset import DIODE
     trainset = DIODE(dataroot=root, train=True, img_size=image_size,
                                 random_crop=True, random_flip=True, disable_cache=True)
-
     valset = DIODE(dataroot=root, train=True, img_size=image_size,
                                 random_crop=False, random_flip=False, disable_cache=True)
-
     if include_test:
       testset = DIODE(dataroot=root, train=False, img_size= image_size,
                                 random_crop=False, random_flip=False)
+      
+  elif dataset == 'fives':
+    from .aligned_dataset import CircDataset
+    trainset = CircDataset(dataroot=root, train=True, img_size=image_size, random_crop=True, random_flip=True)
+    valset = CircDataset(dataroot=root, train=True, img_size=image_size, random_crop=False, random_flip=False)
 
-  
   loader = DataLoader(
       dataset=trainset, num_workers=num_workers, pin_memory=True,
       batch_sampler=DistInfiniteBatchSampler(
@@ -232,7 +226,6 @@ def load_data(
           shuffle=not deterministic, filling=True, rank=dist.get_rank(), world_size=dist.get_world_size(),
       )
   )
-  
   
   num_tasks = dist.get_world_size()
   global_rank = dist.get_rank()

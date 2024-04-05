@@ -21,6 +21,39 @@ from tqdm import tqdm
 #     """
     
 
+def scale_data(data_dir, processed_dir, resolution=64):
+    """
+    Scale images to selected resolution.
+    """
+    print("Scaling images to set resolution...")
+    # Load image dataset from data_dir 
+    # Assuming 'dataset' is a 3D array with shape (height, width, channels)
+    img_files = [f for f in os.listdir(os.path.join(data_dir,"images")) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+    mask_files = [f for f in os.listdir(os.path.join(data_dir,"masks")) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+    num_images = len(img_files)
+
+    for file in tqdm(img_files):
+        # Generate names for files 
+        tokens = re.split("_", file)
+        index = int(tokens[0])
+        label = tokens[1]
+        # Load images
+        image = Image.open(data_dir+"images/"+file)
+        mask = Image.open(data_dir+"masks/"+file)
+        # Scale images 
+        image = image.resize((resolution, resolution), Image.LANCZOS)
+        mask = mask.resize((resolution, resolution), Image.LANCZOS)
+        # Glue images together 
+        combined_image = Image.new("RGB", (2*resolution,resolution))
+        combined_image.paste(image, (resolution,0))
+        combined_image.paste(mask, (0,0))
+
+        # Save the result to the output directory
+        file_name = str(index)+"_"+label
+        combined_image.save(os.path.join(processed_dir+"train", f"{file_name}"))
+    print("Finished.")
+
+
 def inscribed_crop(data_dir, processed_dir):
     """
     Crop images to remove outter black portions of image outside of retina.
@@ -95,11 +128,12 @@ def main():
     # data paramters
     data_dir = "/home/sszabados/datasets/fives/train/"
     temp_dir = data_dir+"temp/"
-    processed_dir = "/home/sszabados/datasets/fives32_random_crop_ddbm"
+    processed_dir = "/home/sszabados/datasets/fives64/"
 
     # load_data(data_dir, processed_dir)
+    scale_data(data_dir, processed_dir, resolution=64)
     # inscribed_crop(data_dir, temp_dir)
-    random_crop(temp_dir, processed_dir, resolution=64, aug_mul=10)
+    # random_crop(temp_dir, processed_dir, resolution=64, aug_mul=10)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,6 @@ Train a diffusion model on images.
 """
 
 import argparse
-
 from ddbm import dist_util, logger
 from datasets import load_data
 from ddbm.resample import create_named_schedule_sampler
@@ -16,17 +15,14 @@ from ddbm.script_util import (
     get_workdir
 )
 from ddbm.train_util import TrainLoop
-
 import torch.distributed as dist
-
 from pathlib import Path
-
-import wandb
 import numpy as np
-
 from glob import glob
 import os
 from datasets.augment import AugmentPipe
+
+
 def main(args):
 
     workdir = get_workdir(args.exp)
@@ -36,13 +32,10 @@ def main(args):
     logger.configure(dir=workdir)
     if dist.get_rank() == 0:
         name = args.exp if args.resume_checkpoint == "" else args.exp + '_resume'
-        wandb.init(project="bridge", group=args.exp,name=name, config=vars(args), mode='online' if not args.debug else 'disabled')
         logger.log("creating model and diffusion...")
     
-
     data_image_size = args.image_size
     
-
     if args.resume_checkpoint == "":
         model_ckpts = list(glob(f'{workdir}/*model*[0-9].*'))
         if len(model_ckpts) > 0:
@@ -58,10 +51,7 @@ def main(args):
     )
     model.to(dist_util.dev())
 
-    if dist.get_rank() == 0:
-        wandb.watch(model, log='all')
     schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)
-
     
     if args.batch_size == -1:
         batch_size = args.global_batch_size // dist.get_world_size()

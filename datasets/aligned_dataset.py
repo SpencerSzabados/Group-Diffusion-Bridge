@@ -11,7 +11,7 @@ import blobfile as bf
 
 from glob import glob
 
-def get_params( size,  resize_size,  crop_size):
+def get_params(size, resize_size, crop_size):
     w, h = size
     new_h = h
     new_w = w
@@ -26,10 +26,18 @@ def get_params( size,  resize_size,  crop_size):
     y = random.randint(0, np.maximum(0, new_h - crop_size))
 
     flip = random.random() > 0.5
-    return {'crop_pos': (x, y), 'flip': flip}
+    rotate = random.random() > 0.5
+    angle = random.random()
+    return {'crop_pos': (x, y), 'flip': flip, 'rotate':rotate, 'angle':angle}
  
 
-def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC,  flip=True, crop = True, totensor=True):
+def get_rotation(params, rotate=True):
+    transform_list = []
+    transform_list.append(transforms.Lambda(lambda img: __rotate(img, params['rotate'], params['angle'])))
+
+    return transforms.Compose(transform_list)
+
+def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC, flip=True, crop = True, totensor=True):
     transform_list = []
     transform_list.append(transforms.Lambda(lambda img: __scale(img, crop_size, method)))
 
@@ -38,6 +46,7 @@ def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC,  flip=
     if totensor:
         transform_list.append(transforms.ToTensor())
     return transforms.Compose(transform_list)
+
 
 def get_tensor(normalize=True, toTensor=True):
     transform_list = []
@@ -49,8 +58,20 @@ def get_tensor(normalize=True, toTensor=True):
                                                 (0.5, 0.5, 0.5))]
     return transforms.Compose(transform_list)
 
+
 def normalize():
     return transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+
+
+def __rotate(img, rotate, angle):
+    if rotate:
+        if isinstance(img, torch.Tensor):
+            return torchvision.tranforms.functional.rotate(img, angle*365.0, expand=False)
+        else:
+            # raise NotImplementedError(f'Only tensors are supported.')
+            return img.rotate(angle*365.0, expand=False)
+    else:
+        return img
 
 
 def __scale(img, target_width, method=Image.BICUBIC):
@@ -58,6 +79,7 @@ def __scale(img, target_width, method=Image.BICUBIC):
         return torch.nn.functional.interpolate(img.unsqueeze(0), size=(target_width, target_width), mode='bicubic', align_corners=False).squeeze(0)
     else:
         return img.resize((target_width, target_width), method)
+
 
 def __flip(img, flip):
     if flip:
@@ -125,7 +147,7 @@ class EdgesDataset(torch.utils.data.Dataset):
         # apply the same transform to both A and B
         params =  get_params(A.size, self.resize_size, self.crop_size)
 
-        transform_image = get_transform( params, self.resize_size, self.crop_size, crop =self.random_crop, flip=self.random_flip)
+        transform_image = get_transform(params, self.resize_size, self.crop_size, crop =self.random_crop, flip=self.random_flip)
 
         A = transform_image(A)
         B = transform_image(B)
@@ -140,6 +162,85 @@ class EdgesDataset(torch.utils.data.Dataset):
         return len(self.AB_paths)
 
 
+class CircDataset(torch.utils.data.Dataset):
+    """A dataset class for paired image dataset that have circular (image) symmetries.
+    It assumes that the directory '/path/to/data/train' contains image pairs in the form of {A,B}.
+    Images should be masked to remove region outside of inscribed circle.
+    During test time, you need to prepare a directory '/path/to/data/test'.
+    """
+
+    def __init__(self, dataroot, train=True, img_size=256, circ_crop=True, random_crop=False, random_flip=True):
+        """Initialize this dataset class.
+        Parameters:
+            opt (Option class) -- stores all the experiment flags; needs to be a subclass of BaseOptions
+        """
+        super().__init__()
+        if train:
+            self.train_dir = os.path.join(dataroot, 'train')  # get the image directory
+            self.train_paths = make_dataset(self.train_dir) # get image paths
+            self.AB_paths = sorted(self.train_paths)
+        else:
+            self.test_dir = os.path.join(dataroot, 'val')  # get the image directory
+            self.AB_paths = make_dataset(self.test_dir) # get image paths
+            
+        self.crop_size = img_size
+        self.resize_size = img_size
+        self.circ_crop = circ_crop
+        self.random_crop = random_crop
+        self.random_flip = random_flip
+        self.train = train
+
+
+    def __getitem__(self, index):
+        """Return a data point and its metadata information.
+        Parameters:
+            index - - a random integer for data indexing
+        Returns a dictionary that contains A, B, A_paths and B_paths
+            A (tensor) - - an image in the input domain
+            B (tensor) - - its corresponding image in the target domain
+            A_paths (str) - - image paths
+            B_paths (str) - - image paths (same as A_paths)
+        """
+        # read a image given a random integer index
+        AB_path = self.AB_paths[index]
+        AB = Image.open(AB_path).convert('RGB')
+        # split AB image into A and B
+        w, h = AB.size
+        w2 = int(w / 2)
+        A = AB.crop((0, 0, w2, h))
+        B = AB.crop((w2, 0, w, h))
+
+        # Create circular image mask
+        if w/2 == h:
+            if np.mod(h,2) == 1:
+                x, y = torch.meshgrid(torch.arange(-(h//2),h//2+1),torch.arange(-(h//2),h//2+1))
+                mask = x**2+y**2 <= (h//2)**2 -2
+            else:
+                x, y = torch.meshgrid(torch.arange(-(h/2)+0.5,h/2+0.5,step=1),torch.arange(-(h/2)+0.5,h/2+0.5,step=1))
+                mask = x**2 + y**2 <= 0.5**2 + (h/2-0.5)**2 -2
+            mask = torch.unsqueeze(mask, -1)
+            mask = mask.expand(-1,-1,3)
+            mask = mask.permute(2,0,1)
+        else:
+            raise NotImplementedError(f"Only square images are supported.")
+
+        # apply the same transform to both A and B
+        params =  get_params(A.size, self.resize_size, self.crop_size)
+
+        rotate_image = get_rotation(params)
+        transform_image = get_transform(params, self.resize_size, self.crop_size, crop =self.random_crop, flip=self.random_flip)
+
+        A = transform_image(rotate_image(A))
+        B = transform_image(rotate_image(B))
+
+        if not self.train:
+            return  B, A, index, AB_path, mask
+        else:
+            return B, A, index, mask
+
+    def __len__(self):
+        """Return the total number of images in the dataset."""
+        return len(self.AB_paths)
 
 
 class DIODE(torch.utils.data.Dataset):

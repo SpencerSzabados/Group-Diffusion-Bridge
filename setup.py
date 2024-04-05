@@ -19,7 +19,6 @@ setup(
         "mpi4py",
         "flash-attn==2.0.4",
         "pillow",
-        "wandb",
         'omegaconf',
         'torchmetrics[image]',
         'prdc',

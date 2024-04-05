@@ -21,7 +21,6 @@ slurm_output/
 
 # Other
 *.DS_Store
-wandb/
 pretrained/
 
 slurm*/
