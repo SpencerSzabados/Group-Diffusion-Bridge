@@ -37,6 +37,7 @@ def get_rotation(params, rotate=True):
 
     return transforms.Compose(transform_list)
 
+
 def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC, flip=True, crop = True, totensor=True):
     transform_list = []
     transform_list.append(transforms.Lambda(lambda img: __scale(img, crop_size, method)))

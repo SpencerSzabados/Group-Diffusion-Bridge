@@ -13,6 +13,7 @@ SAMPLER=real-uniform
 NUM_RES_BLOCKS=2
 USE_16FP=True
 ATTN_TYPE=flash
+NUM_WORKERS=1
 
 
 # Arguments
@@ -30,6 +31,8 @@ elif [[ $DATASET_NAME == "fives" ]]; then
     IMG_SIZE=64
     NUM_CH=128
     NUM_RES_BLOCKS=3
+    USE_16FP=False
+    ATTN_TYPE=reg
     EXP="h2e${IMG_SIZE}_${NUM_CH}d"
     SAVE_ITER=10000
 elif [[ $DATASET_NAME == "diode" ]]; then
@@ -72,7 +75,7 @@ fi
 if  [[ $IMG_SIZE == 256 ]]; then
     BS=16
 elif  [[ $IMG_SIZE == 64 ]]; then
-    BS=64
+    BS=32
 else
     echo "Not supported"
     exit 1

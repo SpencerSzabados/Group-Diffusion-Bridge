@@ -182,7 +182,7 @@ class KarrasDenoiser:
             return samples
         x_t = bridge_sample(x_start, xT, sigmas)
 
-        model_output, denoised = self.denoise(model, x_t, sigmas,  **model_kwargs)
+        model_output, denoised = self.denoise(model, x_t, sigmas, **model_kwargs)
 
         weights = self.get_weightings(sigmas)
         
@@ -197,8 +197,6 @@ class KarrasDenoiser:
 
         return terms
     
-
-
     def denoise(self, model, x_t, sigmas ,**model_kwargs):
 
         c_skip, c_out, c_in = [
@@ -209,6 +207,7 @@ class KarrasDenoiser:
         model_output = model(c_in * x_t, rescaled_t, **model_kwargs)
         denoised = c_out * model_output + c_skip * x_t
         return model_output, denoised
+
 
 def karras_sample(
     diffusion,
