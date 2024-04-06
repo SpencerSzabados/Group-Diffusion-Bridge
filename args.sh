@@ -31,8 +31,8 @@ elif [[ $DATASET_NAME == "fives" ]]; then
     IMG_SIZE=64
     NUM_CH=128
     NUM_RES_BLOCKS=3
-    USE_16FP=False
-    ATTN_TYPE=reg
+    USE_16FP=True
+    ATTN_TYPE=flash
     EXP="h2e${IMG_SIZE}_${NUM_CH}d"
     SAVE_ITER=10000
 elif [[ $DATASET_NAME == "diode" ]]; then
