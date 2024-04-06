@@ -31,6 +31,7 @@ import glob
 # We found that the lg_loss_scale quickly climbed to
 # 20-21 within the first ~1K steps of training.
 INITIAL_LOG_LOSS_SCALE = 20.0
+
 class TrainLoop:
     def __init__(
         self,
@@ -210,18 +211,18 @@ class TrainLoop:
                 
                 batch = self.preprocess(batch)
 
-                # # TODO: Remove - this code is just for validating dataloader and masking operations
-                # grid_img = torchvision.utils.make_grid(batch[0:10], nrow = 10, normalize = True)
-                # torchvision.utils.save_image(grid_img, f"tmp_imgs/batch_sample.pdf")
+                # TODO: Remove - this code is just for validating dataloader and masking operations
+                grid_img = torchvision.utils.make_grid(batch[0:10], nrow = 10, normalize = True)
+                torchvision.utils.save_image(grid_img, f"tmp_imgs/batch_sample.pdf")
 
                 # Mask input if mask exists
                 if mask is not None or mask > 0:
                     batch = batch*mask
                     cond = cond*mask
 
-                # # TODO: Remove - this code is just for validating dataloader and masking operations
-                # grid_img = torchvision.utils.make_grid(batch[0:10], nrow = 10, normalize = True)
-                # torchvision.utils.save_image(grid_img, f"tmp_imgs/masked_batch_sample.pdf")
+                # TODO: Remove - this code is just for validating dataloader and masking operations
+                grid_img = torchvision.utils.make_grid(batch[0:10], nrow = 10, normalize = True)
+                torchvision.utils.save_image(grid_img, f"tmp_imgs/masked_batch_sample.pdf")
                     
                 if self.augment is not None:
                     batch, _ = self.augment(batch)

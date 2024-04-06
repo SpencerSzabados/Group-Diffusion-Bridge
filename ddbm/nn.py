@@ -266,7 +266,8 @@ def conv_nd(dims, *args, **kwargs):
     Create a 1D, 2D, or 3D group equivariant convolution layer.
     """
     g_equiv=True
-    g_output="D4_K"
+    g_output="D4_S"
+    
     if g_equiv == True:
         if dims == 1:
             print(f'Initializing normal cnn layer.')
