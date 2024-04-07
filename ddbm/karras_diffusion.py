@@ -210,6 +210,7 @@ class KarrasDenoiser:
         denoised = c_out * model_output + c_skip * x_t
         return model_output, denoised
 
+
 def karras_sample(
     diffusion,
     model,

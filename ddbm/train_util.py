@@ -217,20 +217,31 @@ class TrainLoop:
                 # Mask input if mask exists
                 if mask is not None or mask > 0:
                     batch = batch*mask
-                    cond = cond*mask
+                    _batch = batch
 
                 # # TODO: Remove - this code is just for validating dataloader and masking operations
                 # grid_img = torchvision.utils.make_grid(batch[0:10], nrow = 10, normalize = True)
                 # torchvision.utils.save_image(grid_img, f"tmp_imgs/masked_batch_sample.pdf")
-                    
+                
+                # # TODO: Remove - this code is just for validating dataloader and masking operations
+                # grid_img = torchvision.utils.make_grid(cond[0:10], nrow = 10, normalize = True)
+                # torchvision.utils.save_image(grid_img, f"tmp_imgs/cond_sample.pdf")
+                
                 if self.augment is not None:
                     batch, _ = self.augment(batch)
                 if isinstance(cond, th.Tensor) and batch.ndim == cond.ndim:
                     xT = self.preprocess(cond)
+                    # Mask input if mask exists
+                    if mask is not None or mask > 0:
+                        cond = xT*mask
+                        _cond = xT
+                        # # TODO: Remove - this code is just for validating dataloader and masking operations
+                        # grid_img = torchvision.utils.make_grid(cond[0:10], nrow = 10, normalize = True)
+                        # torchvision.utils.save_image(grid_img, f"tmp_imgs/masked_cond_sample.pdf")
                     cond = {'xT': xT}
                 else:
                     cond['xT'] = self.preprocess(cond['xT'])
-                    
+
                 took_step = self.run_step(batch, cond)
                 if took_step and self.step % self.log_interval == 0:
                     logs = logger.dumpkvs()
@@ -240,13 +251,48 @@ class TrainLoop:
                     # Run for a finite amount of time in integration tests.
                     if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
                         return
-                    
-                    test_batch, test_cond, _ = next(iter(self.test_data))
+
+                    test_batch, test_cond, _, mask = next(iter(self.test_data))
                     test_batch = self.preprocess(test_batch)
+
+                    # Mask input if mask exists
+                    if mask is not None or mask > 0:
+                        test_batch = test_batch*mask
+                        test_cond = test_cond*mask
+
                     if isinstance(test_cond, th.Tensor) and test_batch.ndim == test_cond.ndim:
                         test_cond = {'xT': self.preprocess(test_cond)}
                     else:
                         test_cond['xT'] = self.preprocess(test_cond['xT'])
+
+                    # Code for performing incremental image sampling during training.
+                    # TODO: Make this function more general and accept model paramters during sampling 
+                    #       rather than the hard coded values used currently.
+                    #       This sould be modified if training on a dataset of different resolution.
+                    logger.log("Generating samples...")
+                    
+                    print(_batch[0:10])
+
+                    sample, path, nfe = karras_sample(
+                        self.diffusion,
+                        self.model,
+                        _cond[0:10].to(dist_util.dev()),
+                        _batch[0:10].to(dist_util.dev()),
+                        steps=40,
+                        model_kwargs={'xT': _cond[0:10].to(dist_util.dev())},
+                        device=dist_util.dev(),
+                        clip_denoised=True,
+                        sampler='heun',
+                        sigma_min=0.0001,
+                        sigma_max=1,
+                        guidance=1
+                    )
+                    sample = sample.contiguous()
+                    # Save the generated sample images
+                    logger.log("Sampled tensor shape: "+str(sample.shape))
+                    grid_img = torchvision.utils.make_grid(sample, nrow = 10, normalize = True)
+                    torchvision.utils.save_image(grid_img, f'tmp_imgs/{self.step}.pdf')
+
                     self.run_test_step(test_batch, test_cond)
                     logs = logger.dumpkvs()
 

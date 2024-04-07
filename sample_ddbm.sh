@@ -16,7 +16,7 @@ GEN_SAMPLER=heun
 BS=16
 NGPU=4
 
-mpiexec -n $NGPU python scripts/image_sample.py --exp=$EXP \
+mpiexec --allow-run-as-root -n $NGPU python image_sample.py --exp=$EXP \
 --batch_size $BS --churn_step_ratio $CHURN_STEP_RATIO --steps $N --sampler $GEN_SAMPLER \
 --model_path $MODEL_PATH --attention_resolutions $ATTN  --class_cond False --pred_mode $PRED \
 ${BETA_D:+ --beta_d="${BETA_D}"} ${BETA_MIN:+ --beta_min="${BETA_MIN}"}  \

@@ -27,7 +27,8 @@ def get_params(size, resize_size, crop_size):
 
     flip = random.random() > 0.5
     rotate = random.random() > 0.5
-    angle = random.random()
+    angle = random.randrange(0,365,10) # step corresponds to angles of 10deg increments
+
     return {'crop_pos': (x, y), 'flip': flip, 'rotate':rotate, 'angle':angle}
  
 
@@ -36,6 +37,7 @@ def get_rotation(params, rotate=True):
     transform_list.append(transforms.Lambda(lambda img: __rotate(img, params['rotate'], params['angle'])))
 
     return transforms.Compose(transform_list)
+
 
 def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC, flip=True, crop = True, totensor=True):
     transform_list = []
@@ -66,10 +68,10 @@ def normalize():
 def __rotate(img, rotate, angle):
     if rotate:
         if isinstance(img, torch.Tensor):
-            return torchvision.tranforms.functional.rotate(img, angle*365.0, expand=False)
+            return torchvision.tranforms.functional.rotate(img, angle, expand=False)
         else:
             # raise NotImplementedError(f'Only tensors are supported.')
-            return img.rotate(angle*365.0, expand=False)
+            return img.rotate(angle, expand=False)
     else:
         return img
 
@@ -186,6 +188,22 @@ class CircDataset(torch.utils.data.Dataset):
         self.crop_size = img_size
         self.resize_size = img_size
         self.circ_crop = circ_crop
+        self.mask = None
+
+        if self.circ_crop:
+            # Create circular image mask
+            # Assume image is square
+            if np.mod(img_size,2) == 1:
+                x, y = torch.meshgrid(torch.arange(-(img_size//2),img_size//2+1),torch.arange(-(img_size//2),img_size//2+1))
+                mask = x**2+y**2 <= (img_size//2)**2 -2.5
+            else:
+                x, y = torch.meshgrid(torch.arange(-(img_size/2)+0.5,img_size/2+0.5,step=1),torch.arange(-(img_size/2)+0.5,img_size/2+0.5,step=1))
+                mask = x**2 + y**2 <= 0.5**2 + (img_size/2-0.5)**2 -2.5
+            mask = torch.unsqueeze(mask, -1)
+            mask = mask.expand(-1,-1,3)
+            mask = mask.permute(2,0,1)
+            self.mask = mask
+
         self.random_crop = random_crop
         self.random_flip = random_flip
         self.train = train
@@ -210,20 +228,6 @@ class CircDataset(torch.utils.data.Dataset):
         A = AB.crop((0, 0, w2, h))
         B = AB.crop((w2, 0, w, h))
 
-        # Create circular image mask
-        if w/2 == h:
-            if np.mod(h,2) == 1:
-                x, y = torch.meshgrid(torch.arange(-(h//2),h//2+1),torch.arange(-(h//2),h//2+1))
-                mask = x**2+y**2 <= (h//2)**2 -2
-            else:
-                x, y = torch.meshgrid(torch.arange(-(h/2)+0.5,h/2+0.5,step=1),torch.arange(-(h/2)+0.5,h/2+0.5,step=1))
-                mask = x**2 + y**2 <= 0.5**2 + (h/2-0.5)**2 -2
-            mask = torch.unsqueeze(mask, -1)
-            mask = mask.expand(-1,-1,3)
-            mask = mask.permute(2,0,1)
-        else:
-            raise NotImplementedError(f"Only square images are supported.")
-
         # apply the same transform to both A and B
         params =  get_params(A.size, self.resize_size, self.crop_size)
 
@@ -234,9 +238,9 @@ class CircDataset(torch.utils.data.Dataset):
         B = transform_image(rotate_image(B))
 
         if not self.train:
-            return  B, A, index, AB_path, mask
+            return  B, A, index, AB_path, self.mask
         else:
-            return B, A, index, mask
+            return B, A, index, self.mask
 
     def __len__(self):
         """Return the total number of images in the dataset."""
@@ -331,4 +335,3 @@ class DIODE(torch.utils.data.Dataset):
         else:
             return len(self.filenames)
     
-

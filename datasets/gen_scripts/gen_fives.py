@@ -45,8 +45,8 @@ def scale_data(data_dir, processed_dir, resolution=64):
         mask = mask.resize((resolution, resolution), Image.LANCZOS)
         # Glue images together 
         combined_image = Image.new("RGB", (2*resolution,resolution))
-        combined_image.paste(image, (resolution,0))
-        combined_image.paste(mask, (0,0))
+        combined_image.paste(image, (0,0))
+        combined_image.paste(mask, (resolution,0))
 
         # Save the result to the output directory
         file_name = str(index)+"_"+label

@@ -2,9 +2,16 @@
 Train a diffusion model on images.
 """
 
+import os
+from pathlib import Path
+from glob import glob
 import argparse
+import numpy as np
+import torch as th
+import torch.distributed as dist
 from ddbm import dist_util, logger
 from datasets import load_data
+from datasets.augment import AugmentPipe
 from ddbm.resample import create_named_schedule_sampler
 from ddbm.script_util import (
     model_and_diffusion_defaults,
@@ -15,15 +22,11 @@ from ddbm.script_util import (
     get_workdir
 )
 from ddbm.train_util import TrainLoop
-import torch.distributed as dist
-from pathlib import Path
-import numpy as np
-from glob import glob
-import os
-from datasets.augment import AugmentPipe
 
 
 def main(args):
+    # Profiler code 
+    th.backends.cudnn.benchmark = True
 
     workdir = get_workdir(args.exp)
     Path(workdir).mkdir(parents=True, exist_ok=True)
@@ -104,6 +107,8 @@ def main(args):
         augment_pipe=augment,
         **sample_defaults()
     ).run_loop()
+
+    
 
 
 def create_argparser():
