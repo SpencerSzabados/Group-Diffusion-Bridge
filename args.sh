@@ -31,7 +31,7 @@ elif [[ $DATASET_NAME == "fives" ]]; then
     NUM_CH=128
     NUM_RES_BLOCKS=3
     EXP="h2e${IMG_SIZE}_${NUM_CH}d"
-    SAVE_ITER=5000
+    SAVE_ITER=1000
 elif [[ $DATASET_NAME == "diode" ]]; then
     DATA_DIR=YOUR_DATASET_PATH
     DATASET=diode

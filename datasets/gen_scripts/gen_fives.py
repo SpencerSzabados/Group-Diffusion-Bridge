@@ -50,7 +50,7 @@ def scale_data(data_dir, processed_dir, resolution=64):
 
         # Save the result to the output directory
         file_name = str(index)+"_"+label
-        combined_image.save(os.path.join(processed_dir+"train", f"{file_name}"))
+        combined_image.save(os.path.join(processed_dir, f"{file_name}"))
     print("Finished.")
 
 
@@ -126,9 +126,9 @@ def random_crop(data_dir, processed_dir, resolution=64, aug_mul=1):
 
 def main():
     # data paramters
-    data_dir = "/home/sszabados/datasets/fives/train/"
+    data_dir = "/home/sszabados/datasets/fives/test/"
     temp_dir = data_dir+"temp/"
-    processed_dir = "/home/sszabados/datasets/fives64/"
+    processed_dir = "/home/sszabados/datasets/fives64/test/"
 
     # load_data(data_dir, processed_dir)
     scale_data(data_dir, processed_dir, resolution=64)

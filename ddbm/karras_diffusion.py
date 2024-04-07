@@ -149,7 +149,7 @@ class KarrasDenoiser:
             return c_skip, c_out, c_in
         
 
-    def training_bridge_losses(self, model, x_start, sigmas, model_kwargs=None, noise=None, vae=None):
+    def training_bridge_losses(self, model, x_start, sigmas, model_kwargs=None, noise=None, vae=None, mask=None):
         
         assert model_kwargs is not None
         xT = model_kwargs['xT']
@@ -157,8 +157,13 @@ class KarrasDenoiser:
             noise = th.randn_like(x_start) 
         sigmas =th.minimum(sigmas, th.ones_like(sigmas)* self.sigma_max)
         terms = {}
-
         dims = x_start.ndim
+
+        if mask is not None:
+            noise = noise*mask
+            xT = xT*mask
+            x_start = x_start*mask
+
         def bridge_sample(x0, xT, t):
             t = append_dims(t, dims)
             # std_t = th.sqrt(t)* th.sqrt(1 - t / self.sigma_max)
@@ -177,15 +182,21 @@ class KarrasDenoiser:
                 std_t = (-th.expm1(logsnr_T - logsnr_t)).sqrt() * (logs_t - logsnr_t/2).exp()
                 
                 samples= a_t * xT + b_t * x0 + std_t * noise
-                
-                
+
             return samples
+        
         x_t = bridge_sample(x_start, xT, sigmas)
+
+        if mask is not None:
+            x_t = x_t*mask
 
         model_output, denoised = self.denoise(model, x_t, sigmas,  **model_kwargs)
 
+        if mask is not None:
+            model_output = model_output*mask
+            denoised = denoised*mask
+
         weights = self.get_weightings(sigmas)
-        
         weights =  append_dims((weights), dims)
         terms["xs_mse"] = mean_flat((denoised - x_start) ** 2)
         terms["mse"] = mean_flat(weights * (denoised - x_start) ** 2)

@@ -108,8 +108,6 @@ def main(args):
         **sample_defaults()
     ).run_loop()
 
-    
-
 
 def create_argparser():
     defaults = dict(
