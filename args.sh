@@ -28,10 +28,10 @@ elif [[ $DATASET_NAME == "fives" ]]; then
     DATA_DIR=/home/datasets/fives64/
     DATASET=fives
     IMG_SIZE=64
-    NUM_CH=128
-    NUM_RES_BLOCKS=3
-    EXP="h2e${IMG_SIZE}_${NUM_CH}d"
-    SAVE_ITER=1000
+    NUM_CH=192
+    NUM_RES_BLOCKS=4
+    EXP="h2e_${DATASET}_${IMG_SIZE}_${NUM_CH}ch_${NUM_RES_BLOCKS}b"
+    SAVE_ITER=5000
 elif [[ $DATASET_NAME == "diode" ]]; then
     DATA_DIR=YOUR_DATASET_PATH
     DATASET=diode
@@ -72,7 +72,7 @@ fi
 if  [[ $IMG_SIZE == 256 ]]; then
     BS=16
 elif  [[ $IMG_SIZE == 64 ]]; then
-    BS=64
+    BS=30
 else
     echo "Not supported"
     exit 1

@@ -128,10 +128,10 @@ def main():
     # data paramters
     data_dir = "/home/sszabados/datasets/fives/test/"
     temp_dir = data_dir+"temp/"
-    processed_dir = "/home/sszabados/datasets/fives64/test/"
+    processed_dir = "/home/sszabados/datasets/fives128/test/"
 
     # load_data(data_dir, processed_dir)
-    scale_data(data_dir, processed_dir, resolution=64)
+    scale_data(data_dir, processed_dir, resolution=128)
     # inscribed_crop(data_dir, temp_dir)
     # random_crop(temp_dir, processed_dir, resolution=64, aug_mul=10)
 

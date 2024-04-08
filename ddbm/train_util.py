@@ -288,8 +288,8 @@ class TrainLoop:
                         sigma_max=1,
                         guidance=1
                     )
-                    sample = sample*mask[0:(min(10,len(batch)//4))]
                     sample = sample.contiguous().detach().cpu()
+                    sample = sample*mask[0:(min(10,len(batch)//4))]
                     gathered = th.cat((gathered,sample),0)
                     # Compute solution difference
                     sample_difference = _sample_batch-sample
@@ -297,7 +297,7 @@ class TrainLoop:
                     # Print ranges of tensors
                     logger.log("Min and Max of tensors: ")
                     logger.log(str(th.min(_sample_cond[0]))+", "+str(th.max(_sample_cond[0])))
-                    logger.log(str(th.min(_sample_batch[0])))
+                    logger.log(str(th.min(_sample_batch[0]))+", "+str(th.max(_sample_batch[0])))
                     logger.log(str(th.min(sample[0]))+", "+str(th.max(sample[0])))
                     # Save the generated sample images
                     logger.log("Sampled tensor shape: "+str(sample.shape))
