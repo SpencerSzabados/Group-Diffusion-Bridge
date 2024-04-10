@@ -27,7 +27,8 @@ def get_params(size, resize_size, crop_size):
 
     flip = random.random() > 0.5
     rotate = random.random() > 0.5
-    angle = random.randrange(0,365,10) # step corresponds to angles of 10deg increments
+    # angle = random.randrange(0,365,10) # step corresponds to angles of 10deg increments
+    angle = random.randrange(0,4,1)*90  # Step corresponds to angles of 90deg
 
     return {'crop_pos': (x, y), 'flip': flip, 'rotate':rotate, 'angle':angle}
  
@@ -335,4 +336,3 @@ class DIODE(torch.utils.data.Dataset):
         else:
             return len(self.filenames)
     
-

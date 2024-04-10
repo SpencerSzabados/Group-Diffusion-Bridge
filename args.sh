@@ -11,9 +11,8 @@ NUM_CH=256
 ATTN=32,16,8
 SAMPLER=real-uniform
 NUM_RES_BLOCKS=2
-USE_16FP=True
-ATTN_TYPE=flash
-NUM_WORKERS=1
+USE_16FP=False
+ATTN_TYPE=reg
 
 
 # Arguments
@@ -29,12 +28,10 @@ elif [[ $DATASET_NAME == "fives" ]]; then
     DATA_DIR=/home/datasets/fives64/
     DATASET=fives
     IMG_SIZE=64
-    NUM_CH=128
+    NUM_CH=192
     NUM_RES_BLOCKS=3
-    USE_16FP=True
-    ATTN_TYPE=flash
-    EXP="h2e${IMG_SIZE}_${NUM_CH}d"
-    SAVE_ITER=10000
+    EXP="h2e_rot90_wt_${DATASET}_${IMG_SIZE}_${NUM_CH}ch_${NUM_RES_BLOCKS}b"
+    SAVE_ITER=5000
 elif [[ $DATASET_NAME == "diode" ]]; then
     DATA_DIR=YOUR_DATASET_PATH
     DATASET=diode
@@ -74,10 +71,11 @@ fi
 
 if  [[ $IMG_SIZE == 256 ]]; then
     BS=16
+elif  [[ $IMG_SIZE == 128 ]]; then
+    BS=16
 elif  [[ $IMG_SIZE == 64 ]]; then
-    BS=32
+    BS=16
 else
     echo "Not supported"
     exit 1
 fi
-

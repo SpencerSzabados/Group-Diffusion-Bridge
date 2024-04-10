@@ -149,16 +149,23 @@ class KarrasDenoiser:
             return c_skip, c_out, c_in
         
 
-    def training_bridge_losses(self, model, x_start, sigmas, model_kwargs=None, noise=None, vae=None):
+    def training_bridge_losses(self, model, x_start, sigmas, model_kwargs=None, noise=None, vae=None, mask=None, dice_weight=0, dice_tol=0):
         
         assert model_kwargs is not None
-        xT = model_kwargs['xT']
+        
         if noise is None:
             noise = th.randn_like(x_start) 
         sigmas =th.minimum(sigmas, th.ones_like(sigmas)* self.sigma_max)
         terms = {}
-
         dims = x_start.ndim
+
+        if mask is not None:
+            # noise = noise*mask
+            model_kwargs['xT'] =  model_kwargs['xT']*mask
+            x_start = x_start*mask
+
+        xT = model_kwargs['xT']
+
         def bridge_sample(x0, xT, t):
             t = append_dims(t, dims)
             # std_t = th.sqrt(t)* th.sqrt(1 - t / self.sigma_max)
@@ -177,26 +184,42 @@ class KarrasDenoiser:
                 std_t = (-th.expm1(logsnr_T - logsnr_t)).sqrt() * (logs_t - logsnr_t/2).exp()
                 
                 samples= a_t * xT + b_t * x0 + std_t * noise
-                
-                
+
             return samples
+        
         x_t = bridge_sample(x_start, xT, sigmas)
 
-        model_output, denoised = self.denoise(model, x_t, sigmas, **model_kwargs)
+        if mask is not None:
+            x_t = x_t*mask
+
+        model_output, denoised = self.denoise(model, x_t, sigmas,  **model_kwargs)
+
+        if mask is not None:
+            model_output = model_output*mask
+            denoised = denoised*mask
+
+        # Compute DICE regularization loss term 
+        dice_loss = 0
+        if dice_weight > 0:
+            # Thresholding is done to each channel and the loss is computed for each and 
+            # then averaged together.
+            thresholded_denoised = th.where(denoised>=dice_tol, th.tensor(1.), th.tensor(0.))
+            dice_loss = 1 - 2*mean_flat(thresholded_denoised*x_start)/(mean_flat(thresholded_denoised)+mean_flat(x_start))
 
         weights = self.get_weightings(sigmas)
-        
         weights =  append_dims((weights), dims)
-        terms["xs_mse"] = mean_flat((denoised - x_start) ** 2)
-        terms["mse"] = mean_flat(weights * (denoised - x_start) ** 2)
+        terms["xs_mse"] = mean_flat((denoised - x_start) ** 2)+dice_weight*dice_loss
+        terms["mse"] = mean_flat(weights * (denoised - x_start) ** 2)+dice_weight*dice_loss
+        terms["dice"] = dice_weight*dice_loss
 
         if "vb" in terms:
             terms["loss"] = terms["mse"] + terms["vb"]
         else:
             terms["loss"] = terms["mse"]
-
         return terms
     
+
+
     def denoise(self, model, x_t, sigmas ,**model_kwargs):
 
         c_skip, c_out, c_in = [
@@ -451,5 +474,3 @@ def forward_sample(
     path.append(y0)
 
     return path
-
-

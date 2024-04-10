@@ -26,7 +26,7 @@ pretrained/
 slurm*/
 *.png
 *.jpg
-
+*.pdf
 *.ckpt
 
 .nfs*

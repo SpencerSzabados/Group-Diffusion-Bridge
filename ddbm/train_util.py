@@ -31,7 +31,6 @@ import glob
 # We found that the lg_loss_scale quickly climbed to
 # 20-21 within the first ~1K steps of training.
 INITIAL_LOG_LOSS_SCALE = 20.0
-
 class TrainLoop:
     def __init__(
         self,
@@ -211,28 +210,37 @@ class TrainLoop:
                 
                 batch = self.preprocess(batch)
 
-                # TODO: Remove - this code is just for validating dataloader and masking operations
-                grid_img = torchvision.utils.make_grid(batch[0:10], nrow = 10, normalize = True)
-                torchvision.utils.save_image(grid_img, f"tmp_imgs/batch_sample.pdf")
+                # # TODO: Remove - this code is just for validating dataloader and masking operations
+                # grid_img = torchvision.utils.make_grid(batch[0:10], nrow = 10, normalize = True)
+                # torchvision.utils.save_image(grid_img, f"tmp_imgs/batch_sample.pdf")
 
                 # Mask input if mask exists
                 if mask is not None or mask > 0:
                     batch = batch*mask
-                    cond = cond*mask
 
-                # TODO: Remove - this code is just for validating dataloader and masking operations
-                grid_img = torchvision.utils.make_grid(batch[0:10], nrow = 10, normalize = True)
-                torchvision.utils.save_image(grid_img, f"tmp_imgs/masked_batch_sample.pdf")
-                    
+                # # TODO: Remove - this code is just for validating dataloader and masking operations
+                # grid_img = torchvision.utils.make_grid(batch[0:10], nrow = 10, normalize = True)
+                # torchvision.utils.save_image(grid_img, f"tmp_imgs/masked_batch_sample.pdf")
+                
+                # # TODO: Remove - this code is just for validating dataloader and masking operations
+                # grid_img = torchvision.utils.make_grid(cond[0:10], nrow = 10, normalize = True)
+                # torchvision.utils.save_image(grid_img, f"tmp_imgs/cond_sample.pdf")
+                
                 if self.augment is not None:
                     batch, _ = self.augment(batch)
                 if isinstance(cond, th.Tensor) and batch.ndim == cond.ndim:
                     xT = self.preprocess(cond)
+                    # Mask input if mask exists
+                    if mask is not None or mask > 0:
+                        cond = xT*mask
+                        # # TODO: Remove - this code is just for validating dataloader and masking operations
+                        # grid_img = torchvision.utils.make_grid(cond[0:10], nrow = 10, normalize = True)
+                        # torchvision.utils.save_image(grid_img, f"tmp_imgs/masked_cond_sample.pdf")
                     cond = {'xT': xT}
                 else:
                     cond['xT'] = self.preprocess(cond['xT'])
-                    
-                took_step = self.run_step(batch, cond)
+
+                took_step = self.run_step(batch, cond, mask=mask)
                 if took_step and self.step % self.log_interval == 0:
                     logs = logger.dumpkvs()
                         
@@ -241,21 +249,69 @@ class TrainLoop:
                     # Run for a finite amount of time in integration tests.
                     if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
                         return
-                    
-                    test_batch, test_cond, _ = next(iter(self.test_data))
+
+                    test_batch, test_cond, _, mask = next(iter(self.test_data))
                     test_batch = self.preprocess(test_batch)
+
+                    # Mask input if mask exists
+                    if mask is not None or mask > 0:
+                        test_batch = test_batch*mask
+                        _sample_batch = test_batch[0:(min(10,len(batch)//4))]
+             
                     if isinstance(test_cond, th.Tensor) and test_batch.ndim == test_cond.ndim:
-                        test_cond = {'xT': self.preprocess(test_cond)}
+                        test_xT = self.preprocess(test_cond)
+                        if mask is not None or mask > 0:
+                            test_xT = test_xT*mask
+                            _sample_cond = test_xT[0:(min(10,len(batch)//4))] 
+                        test_cond = {'xT': test_xT}
                     else:
                         test_cond['xT'] = self.preprocess(test_cond['xT'])
+
+                    # Code for performing incremental image sampling during training.
+                    # TODO: Make this function more general and accept model paramters during sampling 
+                    #       rather than the hard coded values used currently.
+                    #       This sould be modified if training on a dataset of different resolution.
+                    logger.log("Generating samples...")
+                    gathered = _sample_cond
+                    gathered = th.cat((_sample_cond,_sample_batch),0)
+                    sample, path, nfe = karras_sample(
+                        self.diffusion,
+                        self.model,
+                        _sample_cond.to(dist_util.dev()),
+                        _sample_batch.to(dist_util.dev()),
+                        steps=40,
+                        model_kwargs={'xT': _sample_cond.to(dist_util.dev())},
+                        device=dist_util.dev(),
+                        clip_denoised=True,
+                        sampler='heun',
+                        sigma_min=0.0001,
+                        sigma_max=1.0,
+                        guidance=1
+                    )
+                    sample = sample.contiguous().detach().cpu()
+                    sample = sample*mask[0:(min(10,len(batch)//4))]
+                    gathered = th.cat((gathered,sample),0)
+                    # Compute solution difference
+                    sample_difference = _sample_batch-sample
+                    gathered = th.cat((gathered,sample_difference),0)
+                    # Print ranges of tensors
+                    logger.log("Min and Max of tensors: ")
+                    logger.log(str(th.min(_sample_cond[0]))+", "+str(th.max(_sample_cond[0])))
+                    logger.log(str(th.min(_sample_batch[0]))+", "+str(th.max(_sample_batch[0])))
+                    logger.log(str(th.min(sample[0]))+", "+str(th.max(sample[0])))
+                    # Save the generated sample images
+                    logger.log("Sampled tensor shape: "+str(sample.shape))
+                    grid_img = torchvision.utils.make_grid(gathered, nrow=min(10,len(batch)//4), normalize=True)
+                    torchvision.utils.save_image(grid_img, f'tmp_imgs/{self.step}.pdf')
+
                     self.run_test_step(test_batch, test_cond)
                     logs = logger.dumpkvs()
 
                 if took_step and self.step % self.save_interval_for_preemption == 0:
                     self.save(for_preemption=True)
         
-    def run_step(self, batch, cond):
-        self.forward_backward(batch, cond)
+    def run_step(self, batch, cond, mask=None):
+        self.forward_backward(batch, cond, mask=mask)
         took_step = self.mp_trainer.optimize(self.opt)
         if took_step:
             self.step += 1
@@ -268,9 +324,12 @@ class TrainLoop:
         with th.no_grad():
             self.forward_backward(batch, cond, train=False)
 
-    def forward_backward(self, batch, cond, train=True):
+    # TODO: make dice and dice_tol arguments rather than hard coded values
+    def forward_backward(self, batch, cond, mask=None, dice_weight=0.2, dice_tol=0.8, train=True):
         if train:
             self.mp_trainer.zero_grad()
+        if mask is not None:
+            mask = mask.to(dist_util.dev())
         for i in range(0, batch.shape[0], self.microbatch):
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
             micro_cond = {
@@ -281,11 +340,14 @@ class TrainLoop:
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
 
             compute_losses = functools.partial(
-                    self.diffusion.training_bridge_losses,
-                    self.ddp_model,
-                    micro,
-                    t,
-                    model_kwargs=micro_cond,
+                self.diffusion.training_bridge_losses,
+                self.ddp_model,
+                micro,
+                t,
+                model_kwargs=micro_cond,
+                mask=mask,
+                dice_weight=dice_weight,
+                dice_tol=dice_tol
                 )
 
             if last_batch or not self.use_ddp:
