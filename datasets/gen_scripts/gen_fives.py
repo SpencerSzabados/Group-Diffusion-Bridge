@@ -13,13 +13,59 @@ import re
 import random 
 import numpy as np 
 from PIL import Image 
+import cv2
 from tqdm import tqdm
 
-# def load_data(data_dir):
-#     """
-#     Load images into npy array for easier management and loading.
-#     """
     
+def convert_grey_scale(data_dir, processed_dir):
+    """
+    Preprocess data and convert it to grey scale images using weighted average of colour channels.
+        Y = 0.3*R + 0.59*G + 0.11*B
+    This is the default formula used within the PIL image conversion code.
+    """
+    print("Converting images to grey scale...")
+    # Load image dataset from data_dir 
+    # Assuming 'dataset' is a 3D array with shape (height, width, channels)
+    img_files = [f for f in os.listdir(os.path.join(data_dir,"images")) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+
+    for file in tqdm(img_files):
+        img_grey = Image.open(data_dir+"images/"+file).convert('L')
+        img_grey.save(os.path.join(processed_dir+"images/", f"{file}"))
+
+
+def CLAHE(data_dir, processed_dir, threshold=0, grid_size=8):
+    """
+    Apply constrast limited adaptive histogram equilization to images.
+    """
+    print("Contrast normalizing images...")
+    # Load image dataset from data_dir 
+    # Assuming 'dataset' is a 3D array with shape (height, width, channels)
+    img_files = [f for f in os.listdir(os.path.join(data_dir,"images")) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+
+    tranform = cv2.createCLAHE(clipLimit=threshold, tileGridSize=(grid_size, grid_size))
+
+    for file in tqdm(img_files):
+        img_grey = cv2.imread(os.path.join(os.path.join(data_dir,"images"), file), cv2.COLOR_BGR2GRAY)
+        img_grey = tranform.apply(img_grey)
+        cv2.imwrite(os.path.join(processed_dir+"images/", f"{file}"), img_grey)
+
+
+def gamma_correction(data_dir, processed_dir, gamma=1):
+    """
+    Apply gamma correction to batch of images
+    """
+    print("Gamma correcting images...")
+    # Load image dataset from data_dir 
+    # Assuming 'dataset' is a 3D array with shape (height, width, channels)
+    img_files = [f for f in os.listdir(os.path.join(data_dir,"images")) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+
+    for file in tqdm(img_files):
+        img_grey = cv2.imread(os.path.join(os.path.join(data_dir,"images"), file))
+        img_grey = (img_grey/255.).astype(np.float32)
+        img_grey = np.power(img_grey, 1./gamma)
+        img_grey = (img_grey*255).astype(np.uint8)
+        cv2.imwrite(os.path.join(processed_dir+"images/", f"{file}"), img_grey)
+
 
 def scale_data(data_dir, processed_dir, resolution=64):
     """
@@ -126,15 +172,14 @@ def random_crop(data_dir, processed_dir, resolution=64, aug_mul=1):
 
 def main():
     # data paramters
-    data_dir = "/home/sszabados/datasets/fives/test/"
-    temp_dir = data_dir+"temp/"
-    processed_dir = "/home/sszabados/datasets/fives128/test/"
+    data_dir = "/home/sszabados/datasets/fives/train/"
+    temp_dir = "/home/sszabados/datasets/fives/temp/"
+    processed_dir = "/home/sszabados/datasets/fives64/train/"
 
-    # load_data(data_dir, processed_dir)
-    scale_data(data_dir, processed_dir, resolution=128)
-    # inscribed_crop(data_dir, temp_dir)
-    # random_crop(temp_dir, processed_dir, resolution=64, aug_mul=10)
-
+    # convert_grey_scale(data_dir, temp_dir)
+    # CLAHE(temp_dir, temp_dir, threshold=1.8, grid_size=8)
+    # gamma_correction(temp_dir, processed_dir, gamma=1.2)
+    scale_data(data_dir, processed_dir, resolution=64)
 
 if __name__ == "__main__":
     main()

@@ -739,6 +739,7 @@ class UNetModel(nn.Module):
             normalization(ch),
             nn.SiLU(),
             zero_module(conv_nd(dims, input_ch, out_channels, 3, padding=1)),
+            # nn.Sigmoid() # TODO: removed for testing DICE loss 
         )
 
     def convert_to_fp16(self):
@@ -789,4 +790,5 @@ class UNetModel(nn.Module):
             h = th.cat([h, hs.pop()], dim=1)
             h = module(h, emb)
         h = h.type(x.dtype)
+
         return self.out(h)

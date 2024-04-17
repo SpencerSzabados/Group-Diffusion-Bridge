@@ -9,6 +9,7 @@ import argparse
 import numpy as np
 import torch as th
 import torch.distributed as dist
+import torchvision
 from ddbm import dist_util, logger
 from datasets import load_data
 from datasets.augment import AugmentPipe
@@ -22,6 +23,9 @@ from ddbm.script_util import (
     get_workdir
 )
 from ddbm.train_util import TrainLoop
+from ddbm.karras_diffusion import karras_sample
+from ddbm.nn import mean_flat, append_dims, append_zero
+from tqdm import tqdm
 
 
 def create_argparser():
@@ -32,12 +36,14 @@ def create_argparser():
         lr=1e-4,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        dice_weight=0.0,
+        dice_tol=0.0,
         global_batch_size=2048,
         batch_size=-1,
         microbatch=-1,  # -1 disables microbatches
         ema_rate="0.9999",  # comma-separated list of EMA values
         log_interval=50,
-        test_interval=500,
+        test_interval=50,
         save_interval=10000,
         save_interval_for_preemption=50000,
         resume_checkpoint="",
@@ -54,7 +60,16 @@ def create_argparser():
     return parser
 
 
-def sample():
+def preprocess(x):
+    """
+    Preprocessing function taken from train_util.py
+    """    
+    if x.shape[1] == 3:
+        x =  x * 2 - 1
+    return x
+
+
+def training_sample(diffusion, model, data, num_samples, step, args):
     """
     Generates a small selection of samples after pausing training of ddbm model. 
     Intended to be used for visual confirmation of training progress.
@@ -72,67 +87,196 @@ def sample():
     |   MSE     |
     +-----------+
     """
-    test_batch, test_cond, _, mask = next(iter(self.test_data))
-    test_batch = self.preprocess(test_batch)
+    test_batch, test_cond, _, mask = next(iter(data))
+    batch_size = len(test_batch)
+
+    if num_samples > batch_size:
+        logger.log("Requested number of training samples > batch_size.")
+        num_samples = batch_size
+
+    test_batch = test_batch[0:num_samples]
+    test_cond = test_cond[0:num_samples]
+    mask = mask[0:num_samples]
+
+    test_batch = preprocess(test_batch) # TODO: removed for testing
 
     # Mask input if mask exists
     if mask is not None or mask > 0:
-        test_batch = test_batch*mask
-        _sample_batch = test_batch[0:(min(10,len(batch)//4))]
+        test_batch = (test_batch*mask)
 
     if isinstance(test_cond, th.Tensor) and test_batch.ndim == test_cond.ndim:
-        test_xT = self.preprocess(test_cond)
+        test_xT = preprocess(test_cond) # TODO: removed for testing
+        # test_xT = test_cond
         if mask is not None or mask > 0:
-            test_xT = test_xT*mask
-            _sample_cond = test_xT[0:(min(10,len(batch)//4))] 
+            test_xT = (test_xT*mask)
         test_cond = {'xT': test_xT}
     else:
-        test_cond['xT'] = self.preprocess(test_cond['xT'])
+        test_cond['xT'] = preprocess(test_cond['xT']) # TODO: removed for testing
+        # test_cond['xT'] = test_cond['xT']
 
-    # Code for performing incremental image sampling during training.
-    # TODO: Make this function more general and accept model paramters during sampling 
-    #       rather than the hard coded values used currently.
-    #       This sould be modified if training on a dataset of different resolution.
     logger.log("Generating samples...")
-    gathered = _sample_cond
-    gathered = th.cat((_sample_cond,_sample_batch),0)
+    gathered = th.cat((test_xT,test_batch),0)
+    # normalize values of gathered to the same scale as the model output 
+    gathered = gathered/2. + 1
     sample, path, nfe = karras_sample(
-        self.diffusion,
-        self.model,
-        _sample_cond.to(dist_util.dev()),
-        _sample_batch.to(dist_util.dev()),
+        diffusion,
+        model,
+        test_xT.to(dist_util.dev()),
+        test_batch.to(dist_util.dev()),
         steps=40,
-        model_kwargs={'xT': _sample_cond.to(dist_util.dev())},
+        model_kwargs={'xT': test_xT.to(dist_util.dev())},
         device=dist_util.dev(),
         clip_denoised=True,
         sampler='heun',
-        sigma_min=0.0001,
-        sigma_max=1,
+        sigma_min=args.sigma_min,
+        sigma_max=args.sigma_max,
         guidance=1
     )
     sample = sample.contiguous().detach().cpu()
-    sample = sample*mask[0:(min(10,len(batch)//4))]
+    sample = sample*mask
+
+    if th.min(test_batch) <= 0 or th.max(test_batch) >= 1:
+        test_batch = (test_batch+1.)/2.
+    if th.min(test_xT) <= 0. or th.max(test_xT) >= 1.:
+        test_xT = (test_xT+1.)/2.
+    if th.min(sample) <= 0. or th.max(sample) >= 1.:
+        sample = (sample+1.)/2.
+
     gathered = th.cat((gathered,sample),0)
     # Compute solution difference
-    sample_difference = _sample_batch-sample
+    sample_difference = test_batch-sample
     gathered = th.cat((gathered,sample_difference),0)
-    # Print ranges of tensors
-    logger.log("Min and Max of tensors: ")
-    logger.log(str(th.min(_sample_cond[0]))+", "+str(th.max(_sample_cond[0])))
-    logger.log(str(th.min(_sample_batch[0])))
-    logger.log(str(th.min(sample[0]))+", "+str(th.max(sample[0])))
     # Save the generated sample images
     logger.log("Sampled tensor shape: "+str(sample.shape))
-    grid_img = torchvision.utils.make_grid(gathered, nrow=min(10,len(batch)//4), normalize=True)
-    torchvision.utils.save_image(grid_img, f'tmp_imgs/{self.step}.pdf')
+    grid_img = torchvision.utils.make_grid(gathered, nrow=num_samples, normalize=True, scale_each=True)
+    torchvision.utils.save_image(grid_img, f'tmp_imgs/{step}.pdf')
 
 
-def calculate_f1_score():
+def calculate_metrics(diffusion, model, data, step, args, num_samples=1000):
     """
     Draws a random sample of conditional images from the test dataset and generates
     samples from these in order to compute the F1 (Dice) score of the model. This is
     used for image segementation accuracy evaluation.
     """
+
+    def __sample():
+        """
+        Generate a large set of sample images from model for use in computing metrics.
+        """
+        test_batch, test_cond, _, mask = next(iter(data))   
+
+        test_batch = preprocess(test_batch) # TODO: removed for testing
+
+        # Mask input if mask exists
+        if mask is not None or mask > 0:
+            test_batch = (test_batch*mask)
+
+        if isinstance(test_cond, th.Tensor) and test_batch.ndim == test_cond.ndim:
+            test_xT = preprocess(test_cond) # TODO: removed for testing
+            # test_xT = test_cond
+            if mask is not None or mask > 0:
+                test_xT = (test_xT*mask)
+            test_cond = {'xT': test_xT}
+        else:
+            test_cond['xT'] = preprocess(test_cond['xT']) # TODO: removed for testing
+            # test_cond['xT'] = test_cond['xT']
+
+        gathered = th.cat((test_xT,test_batch),0)
+        # normalize values of gathered to the same scale as the model output 
+        gathered = gathered/2. + 1
+        sample, path, nfe = karras_sample(
+            diffusion,
+            model,
+            test_xT.to(dist_util.dev()),
+            test_batch.to(dist_util.dev()),
+            steps=40,
+            model_kwargs={'xT': test_xT.to(dist_util.dev())},
+            device=dist_util.dev(),
+            clip_denoised=True,
+            sampler='heun',
+            sigma_min=args.sigma_min,
+            sigma_max=args.sigma_max,
+            guidance=1
+        )
+        sample = sample.contiguous().detach().cpu()
+        sample = sample*mask
+        # sample = (sample+1.)/2.
+
+        return sample, test_xT, mask
+
+    def __compute_scores(gen_img, ref_img):
+        """
+        Function computes the f1 dice loss between a generated image (mask) and the reference image
+        """
+        # Ensure imputs are normalized to [0,1]
+        if th.min(gen_img) <= 0. or th.max(gen_img) >= 1.:
+            print(f"gen_img range: min:{th.min(gen_img)}, max:{th.max(gen_img)}")
+            # gen_img = (gen_img+1.)/2.
+            gen_img = gen_img.clamp(0,1)
+            assert th.min(gen_img) >= 0. and th.max(gen_img) <= 1.
+        if th.min(ref_img) <= 0. or th.max(ref_img) >= 1.:
+            print(f"ref_img range: min:{th.min(ref_img)}, max:{th.max(ref_img)}")
+            # ref_img = (ref_img+1.)/2.
+            ref_img = ref_img.clamp(0,1)
+            assert th.min(ref_img) >= 0. and th.max(ref_img) <= 1.
+        # Compute MSE
+        mse_loss = mean_flat((gen_img-ref_img)**2)
+        # Compute DICE loss
+        dice = 2.*mean_flat(gen_img*ref_img+1e-8)/(mean_flat(gen_img)+mean_flat(ref_img)+1e-8)
+        gen_img_bin = (gen_img >= 0.5).float()
+        ref_img_bin = (ref_img >= 0.5).float()
+        dice_tol = 2.*mean_flat(gen_img_bin*ref_img_bin+1e-8)/(mean_flat(gen_img_bin)+mean_flat(ref_img_bin)+1e-8)
+        # Compute accuracy 
+        I = th.ones_like(ref_img)
+        tp = mean_flat(gen_img_bin*ref_img_bin)
+        tn = mean_flat((I-gen_img_bin)*(I-ref_img_bin))
+        fp = mean_flat(gen_img_bin*(I-ref_img_bin))
+        fn = mean_flat((I-gen_img_bin)*ref_img_bin)
+        accuracy = (tp+tn+1e-10)/(tp+tn+fp+fn+1e-10)
+        precision = (tp+1e-10)/(tp+fp+1e-10)
+        recall = (tp+1e-10)/(tp+fn+1e-10)
+
+        scores = {}
+        scores["mse"] = mse_loss
+        scores["dice"] = dice
+        scores["dice_tol"] = dice_tol
+        scores["accuracy"] = accuracy
+        scores["precision"] = precision
+        scores["recall"] = recall
+
+        return scores
+
+    if args.batch_size == -1:
+        batch_size = args.global_batch_size // dist.get_world_size()
+        if args.global_batch_size % dist.get_world_size() != 0:
+            logger.log(
+                f"warning, using smaller global_batch_size of {dist.get_world_size()*batch_size} instead of {args.global_batch_size}"
+            )
+    else:
+        batch_size = args.batch_size
+
+    gathered_scores = {"mse":0, "dice":0, "dice_tol":0, "accuracy":0, "precision":0, "recall":0}
+    num_inter = num_samples//batch_size
+
+    for i in tqdm(range(1,(num_inter+1))):
+        # Generate samples from model to compute f1 score against and fid
+        sample, target, mask = __sample()
+        scores = __compute_scores(sample, target)
+        # update averages 
+        gathered_scores["mse"] = ((i-1)/i)*gathered_scores["mse"] + scores["mse"]/i
+        gathered_scores["dice"] = ((i-1)/i)*gathered_scores["dice"] + scores["dice"]/i
+        gathered_scores["dice_tol"] = ((i-1)/i)*gathered_scores["dice_tol"] + scores["dice_tol"]/i
+        gathered_scores["accuracy"] = ((i-1)/i)*gathered_scores["accuracy"] + scores["accuracy"]/i
+        gathered_scores["precision"] = ((i-1)/i)*gathered_scores["precision"] + scores["precision"]/i
+        gathered_scores["recall"] = ((i-1)/i)*gathered_scores["recall"] + scores["recall"]/i
+    
+    logger.log("Current training step:", step)
+    logger.log("mse:", gathered_scores["mse"])
+    logger.log("dice:", gathered_scores["dice"])
+    logger.log("dice_tol:", gathered_scores["dice_tol"])
+    logger.log("accuracy:", gathered_scores["accuracy"])
+    logger.log("precision:", gathered_scores["precision"])
+    logger.log("recall:", gathered_scores["recall"])
 
 
 def main(args):
@@ -184,6 +328,7 @@ def main(args):
         dataset=args.dataset,
         batch_size=batch_size,
         image_size=data_image_size,
+        num_channels=args.in_channels,
         num_workers=args.num_workers,
     )
     
@@ -195,7 +340,7 @@ def main(args):
         augment = None
         
     logger.log("training...")
-    TrainLoop(
+    trainloop = TrainLoop(
         model=model,
         diffusion=diffusion,
         train_data=data,
@@ -217,7 +362,23 @@ def main(args):
         lr_anneal_steps=args.lr_anneal_steps,
         augment_pipe=augment,
         **sample_defaults()
-    ).run_loop()
+    )
+
+    # Train model incrementally 
+    while True:
+        # TODO: Assert is added to ensure model is saved and resumed after sampling 
+        #       rather than having to chaning the TrainLoop class to accept new input.
+        # assert args.test_interval == 0 or args.test_interval > args.save_interval
+
+        if args.test_interval > 0:
+            step, ema_rate = trainloop.run_loop()
+            # Compute model metrics
+            model.eval()
+            training_sample(diffusion, model, test_data, 10, step, args)
+            calculate_metrics(diffusion, model, test_data, step, args)
+            model.train()
+        else:
+            trainloop.run_loop()
 
 
 if __name__ == "__main__":

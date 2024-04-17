@@ -6,8 +6,8 @@ import numpy as np
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision
 from piq import LPIPS
-
 
 from .nn import mean_flat, append_dims, append_zero
 
@@ -36,16 +36,13 @@ class KarrasDenoiser:
         weight_schedule="karras",
         pred_mode='both',
         loss_norm="lpips",
+        clip_denoised=True
     ):
         self.sigma_data = sigma_data
-        
         self.sigma_max = sigma_max 
         self.sigma_min = sigma_min 
-
         self.beta_d = beta_d
         self.beta_min = beta_min
-        
-
         self.sigma_data_end = self.sigma_data
         self.cov_xy = cov_xy
             
@@ -59,6 +56,7 @@ class KarrasDenoiser:
         self.rho = rho
         self.num_timesteps = 40
         self.image_size = image_size
+        self.clip_denoised = clip_denoised
 
 
     def get_snr(self, sigmas):
@@ -149,7 +147,7 @@ class KarrasDenoiser:
             return c_skip, c_out, c_in
         
 
-    def training_bridge_losses(self, model, x_start, sigmas, model_kwargs=None, noise=None, vae=None, mask=None):
+    def training_bridge_losses(self, model, x_start, sigmas, model_kwargs=None, noise=None, vae=None, mask=None, dice_weight=0, dice_tol=0):
         
         assert model_kwargs is not None
         
@@ -194,23 +192,43 @@ class KarrasDenoiser:
 
         model_output, denoised = self.denoise(model, x_t, sigmas,  **model_kwargs)
 
+        # if self.clip_denoised:
+            # denoised = denoised.clamp(-1, 1)
+
         if mask is not None:
             model_output = model_output*mask
             denoised = denoised*mask
 
+        # Compute DICE regularization loss term 
+            # Added DICE++ loss and softmax thresholding 
+        dice_loss = 0
+        if dice_weight > 0:
+            norm_denoised = mask*(denoised.clamp(0,1))
+            norm_x_start = mask*(x_start.clamp(0,1))
+            # dice_loss = 1. - 2.*mean_flat(norm_denoised*norm_x_start+1e-8)/(mean_flat(norm_denoised)+mean_flat(norm_x_start)+1e-8)
+            dice_loss = 1. - 2.*mean_flat(denoised*x_start+1e-8)/(mean_flat(denoised)+mean_flat(x_start)+1e-8)
+
+        # TODO: Remote - code only for debugging DICE loss.
+        # th.set_printoptions(threshold=10000)
+        # print(denoised[0])
+        # print(x_start[0])
+        # print((norm_denoised*norm_x_start)[0])
+        # gathered = th.cat((xT, x_start, denoised, norm_denoised, (norm_denoised>=0.5).float()),0)
+        # grid_img = torchvision.utils.make_grid(gathered, nrow=len(x_start), normalize=False)
+        # torchvision.utils.save_image(grid_img, f'tmp_imgs/debug_dice.pdf')
+
         weights = self.get_weightings(sigmas)
-        weights =  append_dims((weights), dims)
+        weights = append_dims((weights), dims)
         terms["xs_mse"] = mean_flat((denoised - x_start) ** 2)
         terms["mse"] = mean_flat(weights * (denoised - x_start) ** 2)
+        terms["dice"] = dice_loss
 
         if "vb" in terms:
-            terms["loss"] = terms["mse"] + terms["vb"]
+            terms["loss"] = terms["vb"] + dice_weight*terms["dice"]
         else:
-            terms["loss"] = terms["mse"]
-
+            terms["loss"] = dice_weight*terms["dice"]
         return terms
     
-
 
     def denoise(self, model, x_t, sigmas ,**model_kwargs):
 
@@ -271,7 +289,6 @@ def karras_sample(
         guidance=guidance,
         **sampler_args,
     )
-    print('nfe:', nfe)
 
     return x_0.clamp(-1, 1), [x.clamp(-1, 1) for x in path], nfe
 
@@ -466,5 +483,3 @@ def forward_sample(
     path.append(y0)
 
     return path
-
-

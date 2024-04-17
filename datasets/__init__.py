@@ -1,21 +1,16 @@
 import torch
 import torchvision
-
-import torchvision.transforms as transforms
-
 import os
 from collections import defaultdict
 import numpy as np
 from tqdm import tqdm
-# import imageio
-
 import math
 import random
 import torch.distributed as dist
-
 from torch.utils.data.sampler import Sampler
-
 from torch.utils.data import DataLoader, Dataset
+import torchvision.transforms as transforms
+
 
 def get_data_scaler(config):
   """Data normalizer. Assume data are always in [0, 1]."""
@@ -38,8 +33,6 @@ def get_data_inverse_scaler(config):
 class UniformDequant(object):
   def __call__(self, x):
     return x + torch.rand_like(x) / 256
-
-
 
 
 class RASampler(Sampler):
@@ -186,6 +179,7 @@ def load_data(
     dataset,
     batch_size,
     image_size,
+    num_channels=3,
     deterministic=False,
     include_test=False,
     seed=42,
@@ -216,8 +210,8 @@ def load_data(
       
   elif dataset == 'fives':
     from .aligned_dataset import CircDataset
-    trainset = CircDataset(dataroot=root, train=True, img_size=image_size, random_crop=True, random_flip=True)
-    valset = CircDataset(dataroot=root, train=True, img_size=image_size, random_crop=False, random_flip=False)
+    trainset = CircDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels, random_crop=False, random_flip=True)
+    valset = CircDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels, random_crop=False, random_flip=False)
 
   loader = DataLoader(
       dataset=trainset, num_workers=num_workers, pin_memory=True,

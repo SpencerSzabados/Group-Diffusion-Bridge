@@ -27,7 +27,8 @@ def get_params(size, resize_size, crop_size):
 
     flip = random.random() > 0.5
     rotate = random.random() > 0.5
-    angle = random.randrange(0,365,10) # step corresponds to angles of 10deg increments
+    # angle = random.randrange(0,365,10) # step corresponds to angles of 10deg increments
+    angle = random.randrange(0,4,1)*90  # Step corresponds to angles of 90deg
 
     return {'crop_pos': (x, y), 'flip': flip, 'rotate':rotate, 'angle':angle}
  
@@ -39,7 +40,7 @@ def get_rotation(params, rotate=True):
     return transforms.Compose(transform_list)
 
 
-def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC, flip=True, crop = True, totensor=True):
+def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC, flip=True, crop=True, totensor=True):
     transform_list = []
     transform_list.append(transforms.Lambda(lambda img: __scale(img, crop_size, method)))
 
@@ -50,19 +51,23 @@ def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC, flip=T
     return transforms.Compose(transform_list)
 
 
-def get_tensor(normalize=True, toTensor=True):
+def get_tensor(normalize=True, toTensor=True, num_channels=3):
     transform_list = []
     if toTensor:
         transform_list += [transforms.ToTensor()]
 
     if normalize:
-        transform_list += [transforms.Normalize((0.5, 0.5, 0.5),
-                                                (0.5, 0.5, 0.5))]
+        transform_list += [normalize(num_channels=num_channels)]
     return transforms.Compose(transform_list)
 
 
-def normalize():
-    return transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+def normalize(num_channels=3):
+    if num_channels == 3:
+        return transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    elif num_channels == 1:
+        return transforms.Normalize((0.5), (0.5))
+    else:
+        raise NotImplementedError(f"Only num_channels == 1 or 3 currently supported.")
 
 
 def __rotate(img, rotate, angle):
@@ -171,7 +176,7 @@ class CircDataset(torch.utils.data.Dataset):
     During test time, you need to prepare a directory '/path/to/data/test'.
     """
 
-    def __init__(self, dataroot, train=True, img_size=256, circ_crop=True, random_crop=False, random_flip=True):
+    def __init__(self, dataroot, train=True, img_size=256, num_channels=3, circ_crop=True, random_crop=False, random_flip=True):
         """Initialize this dataset class.
         Parameters:
             opt (Option class) -- stores all the experiment flags; needs to be a subclass of BaseOptions
@@ -187,6 +192,7 @@ class CircDataset(torch.utils.data.Dataset):
             
         self.crop_size = img_size
         self.resize_size = img_size
+        self.num_channels = num_channels
         self.circ_crop = circ_crop
         self.mask = None
 
@@ -200,7 +206,12 @@ class CircDataset(torch.utils.data.Dataset):
                 x, y = torch.meshgrid(torch.arange(-(img_size/2)+0.5,img_size/2+0.5,step=1),torch.arange(-(img_size/2)+0.5,img_size/2+0.5,step=1))
                 mask = x**2 + y**2 <= 0.5**2 + (img_size/2-0.5)**2 -2.5
             mask = torch.unsqueeze(mask, -1)
-            mask = mask.expand(-1,-1,3)
+            if num_channels == 3:
+                mask = mask.expand(-1,-1,3)
+            elif num_channels == 1:
+                 mask = mask.expand(-1,-1,1)
+            else:
+                raise NotImplementedError(f"Only num_channels == 1 or 3 supported.")
             mask = mask.permute(2,0,1)
             self.mask = mask
 
@@ -221,7 +232,12 @@ class CircDataset(torch.utils.data.Dataset):
         """
         # read a image given a random integer index
         AB_path = self.AB_paths[index]
-        AB = Image.open(AB_path).convert('RGB')
+        if self.num_channels == 3:
+            AB = Image.open(AB_path).convert('RGB')
+        elif self.num_channels == 1:
+            AB = Image.open(AB_path).convert('L')
+        else:
+            raise NotImplementedError(f"Only num_channels == 1 or 3 supported.")
         # split AB image into A and B
         w, h = AB.size
         w2 = int(w / 2)
@@ -232,7 +248,7 @@ class CircDataset(torch.utils.data.Dataset):
         params =  get_params(A.size, self.resize_size, self.crop_size)
 
         rotate_image = get_rotation(params)
-        transform_image = get_transform(params, self.resize_size, self.crop_size, crop =self.random_crop, flip=self.random_flip)
+        transform_image = get_transform(params, self.resize_size, self.crop_size, crop=self.random_crop, flip=self.random_flip)
 
         A = transform_image(rotate_image(A))
         B = transform_image(rotate_image(B))
@@ -326,8 +342,6 @@ class DIODE(torch.utils.data.Dataset):
         else:
             return img, cond, index
         
-    
-
     def __len__(self):
         """Return the total number of images in the dataset."""
         if self.cache is not None:
