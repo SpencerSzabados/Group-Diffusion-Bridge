@@ -107,7 +107,7 @@ class EdgesDataset(torch.utils.data.Dataset):
     During test time, you need to prepare a directory '/path/to/data/test'.
     """
 
-    def __init__(self, dataroot, train=True,  img_size=256, random_crop=False, random_flip=True):
+    def __init__(self, dataroot, train=True, img_size=256, num_channels=3, random_crop=False, random_flip=True):
         """Initialize this dataset class.
         Parameters:
             opt (Option class) -- stores all the experiment flags; needs to be a subclass of BaseOptions
@@ -125,7 +125,7 @@ class EdgesDataset(torch.utils.data.Dataset):
             
         self.crop_size = img_size
         self.resize_size = img_size
-        
+        self.num_channels = num_channels
         self.random_crop = random_crop
         self.random_flip = random_flip
         self.train = train
@@ -141,11 +141,15 @@ class EdgesDataset(torch.utils.data.Dataset):
             A_paths (str) - - image paths
             B_paths (str) - - image paths (same as A_paths)
         """
-        # read a image given a random integer index
-
+        # Read an image given a random integer index
         AB_path = self.AB_paths[index]
-        AB = Image.open(AB_path).convert('RGB')
-        # split AB image into A and B
+        if self.num_channels == 3:
+            AB = Image.open(AB_path).convert('RGB')
+        elif self.num_channels == 1:
+            AB = Image.open(AB_path).convert('L')
+        else:
+            raise NotImplementedError(f"Only num_channels == 1 or 3 supported.")
+        # Split AB image into A and B
         w, h = AB.size
         w2 = int(w / 2)
         A = AB.crop((0, 0, w2, h))
@@ -153,7 +157,6 @@ class EdgesDataset(torch.utils.data.Dataset):
 
         # apply the same transform to both A and B
         params =  get_params(A.size, self.resize_size, self.crop_size)
-
         transform_image = get_transform(params, self.resize_size, self.crop_size, crop =self.random_crop, flip=self.random_flip)
 
         A = transform_image(A)
@@ -230,7 +233,7 @@ class CircDataset(torch.utils.data.Dataset):
             A_paths (str) - - image paths
             B_paths (str) - - image paths (same as A_paths)
         """
-        # read a image given a random integer index
+        # Read an image given a random integer index
         AB_path = self.AB_paths[index]
         if self.num_channels == 3:
             AB = Image.open(AB_path).convert('RGB')
@@ -246,7 +249,6 @@ class CircDataset(torch.utils.data.Dataset):
 
         # apply the same transform to both A and B
         params =  get_params(A.size, self.resize_size, self.crop_size)
-
         rotate_image = get_rotation(params)
         transform_image = get_transform(params, self.resize_size, self.crop_size, crop=self.random_crop, flip=self.random_flip)
 

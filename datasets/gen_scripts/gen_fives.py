@@ -217,9 +217,9 @@ def grid_crop(data_dir, processed_dir, resolution=64):
 
 def main():
     # data paramters
-    data_dir = "/home/sszabados/datasets/fives/test/"
+    data_dir = "/home/sszabados/datasets/fives/train/"
     temp_dir = "/home/sszabados/datasets/fives/temp/"
-    processed_dir = "/home/sszabados/datasets/fives_patches128/test/"
+    processed_dir = "/home/sszabados/datasets/fives_patches128/train/"
 
     # convert_grey_scale(data_dir, temp_dir)
     # CLAHE(temp_dir, temp_dir, threshold=1.8, grid_size=8)
