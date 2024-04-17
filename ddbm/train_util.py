@@ -214,7 +214,7 @@ class TrainLoop:
                 batch = self.preprocess(batch) # TODO: removed for testing 
 
                 # Mask input if mask exists
-                if mask is not None or mask > 0:
+                if mask[0] != -1 and mask is not None:
                     batch = batch*mask
                 
                 if self.augment is not None:
@@ -223,7 +223,7 @@ class TrainLoop:
                     xT = self.preprocess(cond) # TODO: removed for testing
                     # xT = cond
                     # Mask input if mask exists
-                    if mask is not None or mask > 0:
+                    if mask[0] != -1 and mask is not None:
                         cond = xT*mask
                     cond = {'xT': xT}
                 else:
@@ -244,13 +244,13 @@ class TrainLoop:
                     test_batch = self.preprocess(test_batch) # TODO: removed for testing
 
                     # Mask input if mask exists
-                    if mask is not None or mask > 0:
+                    if mask[0] != -1 and mask is not None:
                         test_batch = test_batch*mask
              
                     if isinstance(test_cond, th.Tensor) and test_batch.ndim == test_cond.ndim:
                         test_xT = self.preprocess(test_cond) # TODO: removed for testing
                         # test_xT = test_cond
-                        if mask is not None or mask > 0:
+                        if mask[0] != -1 and mask is not None:
                             test_xT = test_xT*mask
                         test_cond = {'xT': test_xT}
                     else:
@@ -288,7 +288,7 @@ class TrainLoop:
         if train:
             self.mp_trainer.zero_grad()
 
-        if mask is not None:
+        if mask[0] != -1 and mask is not None:
             mask = mask.to(dist_util.dev())
 
         for i in range(0, batch.shape[0], self.microbatch):

@@ -39,7 +39,7 @@ def get_rotation(params, rotate=True):
         transform_list.append(transforms.Lambda(lambda img: __rotate(img, params['rotate'], params['angle'])))
     else:
         transform_list.append(transforms.Lambda(lambda img: img))
-        
+
     return transforms.Compose(transform_list)
 
 
@@ -122,7 +122,7 @@ class EdgesDataset(torch.utils.data.Dataset):
             self.AB_paths = sorted(self.train_paths)
         else:
             self.test_dir = os.path.join(dataroot, 'val')  # get the image directory
-            self.AB_paths = make_dataset(self.test_dir) # get image paths
+            self.AB_paths = make_dataset(self.tesst_dir) # get image paths
             
         self.crop_size = img_size
         self.resize_size = img_size
@@ -132,6 +132,7 @@ class EdgesDataset(torch.utils.data.Dataset):
         self.rotate = rotate
         self.angle = angle
         self.train = train
+        self.mask = -1
 
 
     def __getitem__(self, index):
@@ -167,9 +168,9 @@ class EdgesDataset(torch.utils.data.Dataset):
         B = transform_image(rotate_image(B))
 
         if not self.train:
-            return  B, A, index, AB_path
+            return  B, A, index, AB_path, self.mask
         else:
-            return B, A, index
+            return B, A, index, self.mask
 
     def __len__(self):
         """Return the total number of images in the dataset."""
@@ -201,7 +202,7 @@ class CircDataset(torch.utils.data.Dataset):
         self.resize_size = img_size
         self.num_channels = num_channels
         self.circ_crop = circ_crop
-        self.mask = None
+        self.mask = -1
 
         if self.circ_crop:
             # Create circular image mask

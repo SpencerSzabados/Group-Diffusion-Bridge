@@ -157,7 +157,7 @@ class KarrasDenoiser:
         terms = {}
         dims = x_start.ndim
 
-        if mask is not None:
+        if mask[0] != -1 and mask is not None:
             # noise = noise*mask
             model_kwargs['xT'] =  model_kwargs['xT']*mask
             x_start = x_start*mask
@@ -187,7 +187,7 @@ class KarrasDenoiser:
         
         x_t = bridge_sample(x_start, xT, sigmas)
 
-        if mask is not None:
+        if mask[0] != -1 and mask is not None:
             x_t = x_t*mask
 
         model_output, denoised = self.denoise(model, x_t, sigmas,  **model_kwargs)
@@ -195,7 +195,7 @@ class KarrasDenoiser:
         # if self.clip_denoised:
             # denoised = denoised.clamp(-1, 1)
 
-        if mask is not None:
+        if mask[0] != -1 and mask is not None:
             model_output = model_output*mask
             denoised = denoised*mask
 
@@ -203,8 +203,8 @@ class KarrasDenoiser:
             # Added DICE++ loss and softmax thresholding 
         dice_loss = 0
         if dice_weight > 0:
-            norm_denoised = mask*(denoised.clamp(0,1))
-            norm_x_start = mask*(x_start.clamp(0,1))
+            norm_denoised = denoised.clamp(0,1)
+            norm_x_start = x_start.clamp(0,1)
             # dice_loss = 1. - 2.*mean_flat(norm_denoised*norm_x_start+1e-8)/(mean_flat(norm_denoised)+mean_flat(norm_x_start)+1e-8)
             dice_loss = 1. - 2.*mean_flat(denoised*x_start+1e-8)/(mean_flat(denoised)+mean_flat(x_start)+1e-8)
 

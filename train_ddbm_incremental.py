@@ -96,18 +96,19 @@ def training_sample(diffusion, model, data, num_samples, step, args):
 
     test_batch = test_batch[0:num_samples]
     test_cond = test_cond[0:num_samples]
-    mask = mask[0:num_samples]
+    if mask[0] != -1 and mask is not None:
+        mask = mask[0:num_samples]
 
     test_batch = preprocess(test_batch) # TODO: removed for testing
 
     # Mask input if mask exists
-    if mask is not None or mask > 0:
+    if mask[0] != -1 and mask is not None:
         test_batch = (test_batch*mask)
 
     if isinstance(test_cond, th.Tensor) and test_batch.ndim == test_cond.ndim:
         test_xT = preprocess(test_cond) # TODO: removed for testing
         # test_xT = test_cond
-        if mask is not None or mask > 0:
+        if mask[0] != -1 and mask is not None:
             test_xT = (test_xT*mask)
         test_cond = {'xT': test_xT}
     else:
@@ -133,7 +134,9 @@ def training_sample(diffusion, model, data, num_samples, step, args):
         guidance=1
     )
     sample = sample.contiguous().detach().cpu()
-    sample = sample*mask
+
+    if mask[0] != -1 and mask is not None:
+        sample = sample*mask
 
     if th.min(test_batch) <= 0 or th.max(test_batch) >= 1:
         test_batch = (test_batch+1.)/2.
@@ -168,13 +171,13 @@ def calculate_metrics(diffusion, model, data, step, args, num_samples=1000):
         test_batch = preprocess(test_batch) # TODO: removed for testing
 
         # Mask input if mask exists
-        if mask is not None or mask > 0:
+        if mask[0] != -1 and mask is not None:
             test_batch = (test_batch*mask)
 
         if isinstance(test_cond, th.Tensor) and test_batch.ndim == test_cond.ndim:
             test_xT = preprocess(test_cond) # TODO: removed for testing
             # test_xT = test_cond
-            if mask is not None or mask > 0:
+            if mask[0] != -1 and mask is not None:
                 test_xT = (test_xT*mask)
             test_cond = {'xT': test_xT}
         else:

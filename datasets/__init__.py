@@ -211,22 +211,22 @@ def load_data(
   elif dataset == 'fives':
     from .aligned_dataset import CircDataset
     trainset = CircDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels,
-                            random_crop=False, random_flip=True)
+                            random_crop=False, random_flip=True, rotate=True, angle=90)
     valset = CircDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels,
-                          random_crop=False, random_flip=False)
+                          random_crop=False, random_flip=False, rotate=True, angle=90)
     if include_test:
        testset = CircDataset(dataroot=root, train=False, img_size=image_size, num_channels=num_channels,
-                          random_crop=False, random_flip=False)
+                          random_crop=False, random_flip=False, rotate=True, angle=90)
        
-  elif dataset == 'fives_patches128':
+  elif dataset == 'fives_patches':
     from .aligned_dataset import EdgesDataset
     trainset = EdgesDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels,
-                                random_crop=True, random_flip=True)
+                                random_crop=True, random_flip=True, rotate=True, angle=90)
     valset = EdgesDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels,
-                                random_crop=False, random_flip=False)
+                                random_crop=False, random_flip=False, rotate=True, angle=90)
     if include_test:
       testset = EdgesDataset(dataroot=root, train=False, img_size=image_size, num_channels=num_channels,
-                                random_crop=False, random_flip=False)
+                                random_crop=False, random_flip=False, rotate=True, angle=90)
 
   loader = DataLoader(
       dataset=trainset, num_workers=num_workers, pin_memory=True,
