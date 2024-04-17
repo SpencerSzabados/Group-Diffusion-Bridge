@@ -88,9 +88,9 @@ fi
 if  [[ $IMG_SIZE == 256 ]]; then
     BS=16
 elif  [[ $IMG_SIZE == 128 ]]; then
-    BS=16
+    BS=14
 elif  [[ $IMG_SIZE == 64 ]]; then
-    BS=16
+    BS=30
 else
     echo "Not supported"
     exit 1

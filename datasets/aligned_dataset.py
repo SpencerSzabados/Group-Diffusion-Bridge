@@ -28,7 +28,7 @@ def get_params(size, resize_size, crop_size, angle):
     flip = random.random() > 0.5
     rotate = random.random() > 0.5
     if angle > 0:
-        angle = random.randrange(0,365,angle) # step corresponds to angles of 10deg increments
+        angle = random.randrange(0,365,angle) # step corresponds to angles of angle-deg increments
 
     return {'crop_pos': (x, y), 'flip': flip, 'rotate':rotate, 'angle':angle}
  

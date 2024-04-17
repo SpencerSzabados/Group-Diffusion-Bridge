@@ -206,7 +206,7 @@ class KarrasDenoiser:
             norm_denoised = denoised.clamp(0,1)
             norm_x_start = x_start.clamp(0,1)
             # dice_loss = 1. - 2.*mean_flat(norm_denoised*norm_x_start+1e-8)/(mean_flat(norm_denoised)+mean_flat(norm_x_start)+1e-8)
-            dice_loss = 1. - 2.*mean_flat(denoised*x_start+1e-8)/(mean_flat(denoised)+mean_flat(x_start)+1e-8)
+            dice_loss = 1. - 2.*mean_flat(denoised*x_start)/(mean_flat(denoised)+mean_flat(x_start)+1e-8)
 
         # TODO: Remote - code only for debugging DICE loss.
         # th.set_printoptions(threshold=10000)
@@ -224,9 +224,9 @@ class KarrasDenoiser:
         terms["dice"] = dice_loss
 
         if "vb" in terms:
-            terms["loss"] = terms["vb"] + dice_weight*terms["dice"]
+            terms["loss"] = terms['mse'] + terms["vb"] + dice_weight*terms["dice"]
         else:
-            terms["loss"] = dice_weight*terms["dice"]
+            terms["loss"] = terms['mse'] + dice_weight*terms["dice"]
         return terms
     
 

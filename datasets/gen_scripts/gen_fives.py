@@ -206,8 +206,8 @@ def grid_crop(data_dir, processed_dir, resolution=64):
 
                 # Glue images together 
                 combined_image = Image.new("L", (2*resolution,resolution))
-                combined_image.paste(mask_cropped, (0,0))
-                combined_image.paste(img_cropped, (resolution,0))
+                combined_image.paste(mask_cropped, (resolution,0))
+                combined_image.paste(img_cropped, (0,0))
                 
                 # Save the result to the output directory
                 file_name = str(index)+"_"+str(i)+str(j)+"_"+label
@@ -217,9 +217,9 @@ def grid_crop(data_dir, processed_dir, resolution=64):
 
 def main():
     # data paramters
-    data_dir = "/home/sszabados/datasets/fives/train/"
+    data_dir = "/home/sszabados/datasets/fives/test/"
     temp_dir = "/home/sszabados/datasets/fives/temp/"
-    processed_dir = "/home/sszabados/datasets/fives_patches128/train/"
+    processed_dir = "/home/sszabados/datasets/fives_patches128/test/"
 
     # convert_grey_scale(data_dir, temp_dir)
     # CLAHE(temp_dir, temp_dir, threshold=1.8, grid_size=8)
