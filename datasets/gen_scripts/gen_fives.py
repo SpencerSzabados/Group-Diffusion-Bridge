@@ -170,16 +170,62 @@ def random_crop(data_dir, processed_dir, resolution=64, aug_mul=1):
     print("Finished.")
 
 
+def grid_crop(data_dir, processed_dir, resolution=64):
+    """
+    Script slices image into set of patches of the specifed resolution. The resulting patches 
+    are stiched to their corresponding patch from the image mask.
+    """
+    print("Slicing images into grids...")
+    img_files = [f for f in os.listdir(os.path.join(data_dir,"images")) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+
+    num_images = len(img_files)
+    w, h = Image.open(data_dir+"images/"+img_files[0]).size
+    assert (w%resolution == 0) and (h%resolution == 0)
+
+    for file in tqdm(img_files):
+        # Generate names for files 
+        tokens = re.split("_", file)
+        index = int(tokens[0])
+        label = tokens[1]
+
+        image = Image.open(data_dir+"images/"+file)
+        mask = Image.open(data_dir+"masks/"+file)
+
+        w, h = image.size
+        for i in range(w//resolution):
+            # Calculate cropping parameters to randomly crop image
+            for j in range(h//resolution):
+                left = i*resolution
+                top = j*resolution
+                right = left+resolution
+                bottom = top+resolution
+
+                # Perform crop
+                img_cropped = image.crop((left, top, right, bottom))
+                mask_cropped = mask.crop((left, top, right, bottom))
+
+                # Glue images together 
+                combined_image = Image.new("L", (2*resolution,resolution))
+                combined_image.paste(mask_cropped, (0,0))
+                combined_image.paste(img_cropped, (resolution,0))
+                
+                # Save the result to the output directory
+                file_name = str(index)+"_"+str(i)+str(j)+"_"+label
+                combined_image.save(os.path.join(processed_dir, f"{file_name}"))
+    print("Finished.")
+
+
 def main():
     # data paramters
-    data_dir = "/home/sszabados/datasets/fives/train/"
+    data_dir = "/home/sszabados/datasets/fives/test/"
     temp_dir = "/home/sszabados/datasets/fives/temp/"
-    processed_dir = "/home/sszabados/datasets/fives64/train/"
+    processed_dir = "/home/sszabados/datasets/fives_patches128/test/"
 
     # convert_grey_scale(data_dir, temp_dir)
     # CLAHE(temp_dir, temp_dir, threshold=1.8, grid_size=8)
     # gamma_correction(temp_dir, processed_dir, gamma=1.2)
-    scale_data(data_dir, processed_dir, resolution=64)
+    # scale_data(data_dir, processed_dir, resolution=64)
+    grid_crop(data_dir, processed_dir, resolution=128)
 
 if __name__ == "__main__":
     main()
