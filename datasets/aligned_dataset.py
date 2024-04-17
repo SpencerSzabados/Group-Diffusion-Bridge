@@ -11,7 +11,7 @@ import blobfile as bf
 
 from glob import glob
 
-def get_params(size, resize_size, crop_size):
+def get_params(size, resize_size, crop_size, angle):
     w, h = size
     new_h = h
     new_w = w
@@ -27,16 +27,19 @@ def get_params(size, resize_size, crop_size):
 
     flip = random.random() > 0.5
     rotate = random.random() > 0.5
-    # angle = random.randrange(0,365,10) # step corresponds to angles of 10deg increments
-    angle = random.randrange(0,4,1)*90  # Step corresponds to angles of 90deg
+    if angle > 0:
+        angle = random.randrange(0,365,angle) # step corresponds to angles of 10deg increments
 
     return {'crop_pos': (x, y), 'flip': flip, 'rotate':rotate, 'angle':angle}
  
 
 def get_rotation(params, rotate=True):
     transform_list = []
-    transform_list.append(transforms.Lambda(lambda img: __rotate(img, params['rotate'], params['angle'])))
-
+    if rotate:
+        transform_list.append(transforms.Lambda(lambda img: __rotate(img, params['rotate'], params['angle'])))
+    else:
+        transform_list.append(transforms.Lambda(lambda img: img))
+        
     return transforms.Compose(transform_list)
 
 
@@ -107,7 +110,7 @@ class EdgesDataset(torch.utils.data.Dataset):
     During test time, you need to prepare a directory '/path/to/data/test'.
     """
 
-    def __init__(self, dataroot, train=True, img_size=256, num_channels=3, random_crop=False, random_flip=True):
+    def __init__(self, dataroot, train=True, img_size=256, num_channels=3, random_crop=False, random_flip=True, rotate=False, angle=0):
         """Initialize this dataset class.
         Parameters:
             opt (Option class) -- stores all the experiment flags; needs to be a subclass of BaseOptions
@@ -118,9 +121,7 @@ class EdgesDataset(torch.utils.data.Dataset):
             self.train_paths = make_dataset(self.train_dir) # get image paths
             self.AB_paths = sorted(self.train_paths)
         else:
-
             self.test_dir = os.path.join(dataroot, 'val')  # get the image directory
-            
             self.AB_paths = make_dataset(self.test_dir) # get image paths
             
         self.crop_size = img_size
@@ -128,6 +129,8 @@ class EdgesDataset(torch.utils.data.Dataset):
         self.num_channels = num_channels
         self.random_crop = random_crop
         self.random_flip = random_flip
+        self.rotate = rotate
+        self.angle = angle
         self.train = train
 
 
@@ -156,11 +159,12 @@ class EdgesDataset(torch.utils.data.Dataset):
         B = AB.crop((w2, 0, w, h))
 
         # apply the same transform to both A and B
-        params =  get_params(A.size, self.resize_size, self.crop_size)
+        params =  get_params(A.size, self.resize_size, self.crop_size, self.angle)
+        rotate_image = get_rotation(params, rotate=self.rotate)
         transform_image = get_transform(params, self.resize_size, self.crop_size, crop =self.random_crop, flip=self.random_flip)
 
-        A = transform_image(A)
-        B = transform_image(B)
+        A = transform_image(rotate_image(A))
+        B = transform_image(rotate_image(B))
 
         if not self.train:
             return  B, A, index, AB_path
@@ -179,7 +183,7 @@ class CircDataset(torch.utils.data.Dataset):
     During test time, you need to prepare a directory '/path/to/data/test'.
     """
 
-    def __init__(self, dataroot, train=True, img_size=256, num_channels=3, circ_crop=True, random_crop=False, random_flip=True):
+    def __init__(self, dataroot, train=True, img_size=256, num_channels=3, circ_crop=True, random_crop=False, random_flip=True, rotate=True, angle=0):
         """Initialize this dataset class.
         Parameters:
             opt (Option class) -- stores all the experiment flags; needs to be a subclass of BaseOptions
@@ -220,6 +224,8 @@ class CircDataset(torch.utils.data.Dataset):
 
         self.random_crop = random_crop
         self.random_flip = random_flip
+        self.rotate = rotate
+        self.angle = angle
         self.train = train
 
 
@@ -248,8 +254,8 @@ class CircDataset(torch.utils.data.Dataset):
         B = AB.crop((w2, 0, w, h))
 
         # apply the same transform to both A and B
-        params =  get_params(A.size, self.resize_size, self.crop_size)
-        rotate_image = get_rotation(params)
+        params =  get_params(A.size, self.resize_size, self.crop_size, self.angle)
+        rotate_image = get_rotation(params, rotate=self.rotate)
         transform_image = get_transform(params, self.resize_size, self.crop_size, crop=self.random_crop, flip=self.random_flip)
 
         A = transform_image(rotate_image(A))

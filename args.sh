@@ -38,6 +38,16 @@ elif [[ $DATASET_NAME == "fives" ]]; then
     NUM_RES_BLOCKS=3
     EXP="h2e_rot90_${DATASET}_${IMG_SIZE}_${IN_CHANNELS}ich_${NUM_CH}ch_${NUM_RES_BLOCKS}b"
     SAVE_ITER=5000
+elif [[ $DATASET_NAME == 'fives_patches128' ]]; then
+    DATA_DIR=/home/datasets/fives64/
+    DATASET=fives
+    IMG_SIZE=64
+    IN_CHANNELS=1
+    OUT_CHANNELS=1
+    NUM_CH=192
+    NUM_RES_BLOCKS=3
+    EXP="h2e_rot90_${DATASET}_${IMG_SIZE}_${IN_CHANNELS}ich_${NUM_CH}ch_${NUM_RES_BLOCKS}b"
+    SAVE_ITER=5000
 elif [[ $DATASET_NAME == "diode" ]]; then
     DATA_DIR=YOUR_DATASET_PATH
     DATASET=diode

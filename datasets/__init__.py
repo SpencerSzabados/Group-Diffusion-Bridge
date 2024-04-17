@@ -190,12 +190,12 @@ def load_data(
       
   if dataset == 'edges2handbags':
     from .aligned_dataset import EdgesDataset
-    trainset = EdgesDataset(dataroot=root, train=True, img_size= image_size, num_channels=num_channels,
+    trainset = EdgesDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels,
                                 random_crop=True, random_flip=True)
-    valset = EdgesDataset(dataroot=root, train=True, img_size= image_size, num_channels=num_channels,
+    valset = EdgesDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels,
                                 random_crop=False, random_flip=False)
     if include_test:
-      testset = EdgesDataset(dataroot=root, train=False, img_size= image_size, num_channels=num_channels,
+      testset = EdgesDataset(dataroot=root, train=False, img_size=image_size, num_channels=num_channels,
                                 random_crop=False, random_flip=False)
 
   elif dataset == 'diode':
@@ -217,6 +217,16 @@ def load_data(
     if include_test:
        testset = CircDataset(dataroot=root, train=False, img_size=image_size, num_channels=num_channels,
                           random_crop=False, random_flip=False)
+       
+  elif dataset == 'fives_patches128':
+    from .aligned_dataset import EdgesDataset
+    trainset = EdgesDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels,
+                                random_crop=True, random_flip=True)
+    valset = EdgesDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels,
+                                random_crop=False, random_flip=False)
+    if include_test:
+      testset = EdgesDataset(dataroot=root, train=False, img_size=image_size, num_channels=num_channels,
+                                random_crop=False, random_flip=False)
 
   loader = DataLoader(
       dataset=trainset, num_workers=num_workers, pin_memory=True,
