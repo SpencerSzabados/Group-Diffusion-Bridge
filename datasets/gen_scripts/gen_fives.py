@@ -219,13 +219,13 @@ def main():
     # data paramters
     data_dir = "/home/sszabados/datasets/fives/test/"
     temp_dir = "/home/sszabados/datasets/fives/temp/"
-    processed_dir = "/home/sszabados/datasets/fives_patches128/test/"
+    processed_dir = "/home/sszabados/datasets/fives512_patches/test/"
 
     # convert_grey_scale(data_dir, temp_dir)
     # CLAHE(temp_dir, temp_dir, threshold=1.8, grid_size=8)
     # gamma_correction(temp_dir, processed_dir, gamma=1.2)
     # scale_data(data_dir, processed_dir, resolution=64)
-    grid_crop(data_dir, processed_dir, resolution=128)
+    grid_crop(data_dir, processed_dir, resolution=512)
 
 if __name__ == "__main__":
     main()
