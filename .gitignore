@@ -23,17 +23,16 @@ slurm_output/
 *.DS_Store
 pretrained/
 
-slurm*/
+*.out 
+*.err
 *.png
 *.jpg
 *.pdf
 *.ckpt
-
 .nfs*
 *.npz
 *.npy
 autoencoder/models*
 *.pt
-
 *.tar
 demo*/

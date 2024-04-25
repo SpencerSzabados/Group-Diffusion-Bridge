@@ -32,8 +32,6 @@ from ddbm.script_util import (
 from diffusers.models import AutoencoderKL
 import lpips
 
-from tqdm import tqdm
-
 
 class VAETrainLoop():
     """
@@ -56,7 +54,8 @@ class VAETrainLoop():
         log_interval=10_000,
         save_interval=10_000,
         total_training_steps=100_000,
-        augment=None
+        augment=None,
+        num_workers=1
     ):
         # Data parameters
         self.data = data
@@ -270,6 +269,7 @@ def create_argparser():
         total_training_steps=100_000,
         resume_checkpoint="",
         augment=False,
+        ngpu=1,
     )
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)
@@ -282,7 +282,7 @@ def main(args):
         model.save()
         exit(0)
         
-    signal.signal(signal.USER1, _sig_handler)
+    signal.signal(signal.SIGUSR1, _sig_handler)
 
     # Profiler code 
     th.backends.cudnn.benchmark = True
@@ -323,6 +323,7 @@ def main(args):
         data_dir=args.data_dir,
         batch_size=batch_size,
         image_size=args.image_size,
+        num_workers=args.ngpu,
         class_cond=False,
     )
     
@@ -349,6 +350,7 @@ def main(args):
             save_interval=args.save_interval,
             total_training_steps=args.total_training_steps,
             augment=args.augment,
+            num_workers=args.ngpu
         )
     
     logger.log("Training...")
