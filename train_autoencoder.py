@@ -96,7 +96,15 @@ class VAETrainLoop():
             )
             dist.barrier()
 
-    def _parse_resume_step_from_filename(self,filename):
+        signal.signal(signal.SIGUSR1, self._sig_handler)
+
+
+    def _sig_handler(self, signum, frame):
+        logger.log(f"Recived SLURM SIGNAL {signum}, stopping up training...")
+        self.save()
+        exit(0)
+
+    def _parse_resume_step_from_filename(self, filename):
         """
         Parse filenames of the form path/to/model_NNNNNN.pt, where NNNNNN is the
         checkpoint's number of steps.
@@ -156,16 +164,20 @@ class VAETrainLoop():
         self.mode.eval()
 
     def encode(self, x):
-        z = self.model.encode(x).latent_dist
+        z = self.model.encode(x)
         return z
         
     def decode(self, z):    
-        x = self.model.decode(z).sample
+        x = self.model.decode(z)
         return x
 
-    def forward(self, x):
-        z = self.encode(x).mean
-        x_hat = self.decode(z)
+    def forward(self, x, sample=True):
+        posterior = self.encode(x).latent_dist
+        if sample:
+            z = posterior.sample()
+        else:
+            z = posterior.mode()
+        x_hat = self.decode(z).sample
         return x_hat
 
     def train_step(self, batch):
@@ -277,13 +289,6 @@ def create_argparser():
 
 
 def main(args):
-    def _sig_handler(signum, frame):
-        print(f"Recived SLURM SIGNAL {signum}, cleaning up training...")
-        model.save()
-        exit(0)
-        
-    signal.signal(signal.SIGUSR1, _sig_handler)
-
     # Profiler code 
     th.backends.cudnn.benchmark = True
 
