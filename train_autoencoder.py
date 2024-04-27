@@ -10,6 +10,8 @@
 import signal 
 import time
 
+from typing import Dict, Optional, Tuple, Union
+
 import os
 from pathlib import Path
 from glob import glob
@@ -17,9 +19,11 @@ import blobfile as bf
 import argparse
 import numpy as np
 import torch as th
+from torch.cuda.amp import autocast, GradScaler
 import torch.distributed as dist
 import torchvision
 from torch.optim import RAdam
+import torch.backends.cudnn as cudnn
 from datasets.image_datasets import load_data
 from datasets.augment import AugmentPipe
 
@@ -51,6 +55,7 @@ class VAETrainLoop():
         lr_anneal_steps=0,
         weight_l2=0.5,
         weight_lpips=0.002,
+        fp16=False,
         log_interval=10_000,
         save_interval=10_000,
         total_training_steps=100_000,
@@ -58,7 +63,10 @@ class VAETrainLoop():
         num_workers=1
     ):
         # Data parameters
-        self.data = data
+        if type(data) != list:
+            self.data = [data]
+        else:
+            self.data = data
         self.image_size = image_size
         self.batch_size = batch_size
         self.augment = augment
@@ -82,6 +90,8 @@ class VAETrainLoop():
         self.opt = RAdam(
             self.model_params, lr=self.lr, weight_decay=self.weight_decay
         )
+        self.fp16 = fp16
+        self.scaler = GradScaler()
         self.loss_fn_l2 = th.nn.MSELoss()
         self.loss_fn_lpips = lpips.LPIPS().to(dist_util.dev())
 
@@ -91,9 +101,11 @@ class VAETrainLoop():
                 logger.log(f"loading model from checkpoint: {resume_checkpoint}...")
                 logger.log('Resume step: ', self.resume_step)
                 
-            self.model.load_state_dict(
-                th.load(resume_checkpoint, map_location=dist_util.dev()),
-            )
+            checkpoint = th.load(self.resume_checkpoint, map_location=dist_util.dev())
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.opt.load_state_dict(checkpoint['optimizer_state_dict'])
+            self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+
             dist.barrier()
 
         signal.signal(signal.SIGUSR1, self._sig_handler)
@@ -117,13 +129,6 @@ class VAETrainLoop():
             return int(split1)
         except ValueError:
             return 0
-        
-    def _master_params_to_state_dict(self, model, params):
-        state_dict = model.state_dict()
-        for i, (name, _value) in enumerate(model.named_parameters()):
-            assert name in state_dict
-            state_dict[name] = params[i]
-        return state_dict   
     
     def save(self, for_preemption=False):
         def _maybe_delete_earliest(filename):
@@ -133,8 +138,7 @@ class VAETrainLoop():
                 earliest = min(freq_states, key=lambda x: x.split('_')[-1].split('.')[0])
                 os.remove(earliest)     
 
-        def _save_checkpoint(params, for_preemption):
-            state_dict = self._master_params_to_state_dict(self.model, self.model_params)
+        def _save_checkpoint(for_preemption):
             if dist.get_rank() == 0:
                 logger.log(f"saving model {self.step}...")
                 filename = f"model_{(self.step):06d}.pt"
@@ -146,9 +150,15 @@ class VAETrainLoop():
                 with bf.BlobFile(bf.join(logger.get_dir(), filename), "wb") as f:
                     th.save(state_dict, f)
 
+                th.save({
+                    'model_state_dict': self.model.state_dict(),
+                    'optimizer_state_dict': self.opt.state_dict(),
+                    'scaler_state_dict': self.scaler.state_dict(),
+                }, filename)
+
         # Save model parameters last to prevent race conditions where a restart
         # loads model at step N, but opt/ema state isn't saved for step N.
-        _save_checkpoint(self.model_params, for_preemption)
+        _save_checkpoint(for_preemption)
         dist.barrier()
 
     def _log_step(self, loss_terms):
@@ -158,10 +168,10 @@ class VAETrainLoop():
         logger.logkv("loss", loss_terms["loss"])
 
     def toggle_training(self):
-        self.model.train()
-
-    def eval(self):
-        self.mode.eval()
+        if self.mode.training:
+            self.mode.eval()
+        else:
+            self.model.train()
 
     def encode(self, x):
         z = self.model.encode(x)
@@ -179,6 +189,22 @@ class VAETrainLoop():
             z = posterior.mode()
         x_hat = self.decode(z).sample
         return x_hat
+
+    def sample(self):
+        self.model.eval()
+
+        batch = th.cat([next(data)[0] for data in self.data])
+        batch = batch.to(dist_util.dev())
+        x_hat = self.forward(batch)
+        sample_grid = th.cat([batch, x_hat], dim=0)
+
+        sample_dir = bf.join(logger.get_dir(), "samples")
+        if dist.get_rank() == 0:
+            os.makedirs(sample_dir, exist_ok=True)
+            
+        torchvision.utils.save_image( (sample_grid+1.)/2., bf.join(sample_dir, f"{self.step}.png"), nrow=batch.shape[0])       
+
+        self.model.train()
 
     def train_step(self, batch):
         assert self.model.training 
@@ -205,9 +231,21 @@ class VAETrainLoop():
 
         batch = batch.to(dist_util.dev())
         
-        loss, loss_terms = _compute_losses(batch)
-        loss.backward()
-        self.opt.step()
+        if self.fp16:
+            with autocast():
+                loss, loss_terms = _compute_losses(batch)
+            # Scales loss, calls backward() on scaled loss to create scaled gradients.
+            self.scaler.scale(loss).backward()
+            # scaler.step() first unscales the gradients of the optimizer's assigned params.
+            # If these gradients do not contain infs or NaNs, optimizer.step() is then called,
+            # otherwise, optimizer.step() is skipped.
+            self.scaler.step(self.opt)
+            # Updates the scale for next iteration.
+            self.scaler.update()
+        else:
+            loss, loss_terms = _compute_losses(batch)
+            loss.backward()
+            self.opt.step()
 
         # self._update_ema() # TODO: add ema and lr rate adjustments later
         # self._anneal_lr()
@@ -228,7 +266,13 @@ class VAETrainLoop():
                 self.save()
                 th.cuda.empty_cache()
     
-            batch, cond = next(self.data)
+            if (self.save_interval != -1 and 
+                self.step > 0 and 
+                self.step % self.sample_interval == 0
+            ):
+                self.sample()
+
+            batch, cond = th.cat([next(data) for data in self.data])
             self.train_step(batch)
  
             # Log incrementally
@@ -276,6 +320,7 @@ def create_argparser():
         lr_anneal_steps=0,
         weight_l2=0.5,
         weight_lpips=0.002,
+        fp16=False,
         log_interval=50,
         save_interval=10_000,
         total_training_steps=100_000,
@@ -324,13 +369,13 @@ def main(args):
     else:
         batch_size = args.batch_size
 
-    data = load_data(
+    data = [load_data(
         data_dir=args.data_dir,
         batch_size=batch_size,
         image_size=args.image_size,
         num_workers=args.ngpu,
         class_cond=False,
-    )
+    ) for data_dir in args.data_dir.split(",")]
     
     if args.augment:
         augment = AugmentPipe(
@@ -350,6 +395,7 @@ def main(args):
             weight_decay=args.weight_decay,
             weight_l2=args.weight_l2,
             weight_lpips=args.weight_lpips,
+            fp16=args.fp16,
             lr_anneal_steps=args.lr_anneal_steps,
             log_interval=args.log_interval,
             save_interval=args.save_interval,
