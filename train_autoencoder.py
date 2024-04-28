@@ -161,11 +161,12 @@ class VAETrainLoop():
                 with bf.BlobFile(bf.join(logger.get_dir(), filename), "wb") as f:
                     th.save(state_dict, f)
 
-                th.save({
-                    'model_state_dict': self.model.state_dict(),
-                    'optimizer_state_dict': self.opt.state_dict(),
-                    'scaler_state_dict': self.scaler.state_dict(),
-                }, filename)
+                with bf.BlobFile(bf.join(logger.get_dir(), filename), "wb") as f:
+                    th.save({
+                        'model_state_dict': self.model.state_dict(),
+                        'optimizer_state_dict': self.opt.state_dict(),
+                        'scaler_state_dict': self.scaler.state_dict(),
+                        }, f)
 
         # Save model parameters last to prevent race conditions where a restart
         # loads model at step N, but opt/ema state isn't saved for step N.
