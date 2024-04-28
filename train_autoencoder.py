@@ -56,7 +56,8 @@ class VAETrainLoop():
         weight_l2=0.5,
         weight_lpips=0.002,
         fp16=False,
-        log_interval=10_000,
+        log_interval=1000,
+        sample_interval=1000,
         save_interval=10_000,
         total_training_steps=100_000,
         augment=None,
@@ -82,6 +83,7 @@ class VAETrainLoop():
         # Logging paramters 
         self.log_interval = log_interval
         self.save_interval = save_interval
+        self.sample_interval = sample_interval 
         # Model states
         self.model = model
         self.resume_step = self.step
@@ -129,8 +131,17 @@ class VAETrainLoop():
             return int(split1)
         except ValueError:
             return 0
+
+    def _master_params_to_state_dict(self, model, params):
+        # TODO: update this function to work with fp16 multiple paramters 
+        state_dict = model.state_dict()
+        for i, (name, _value) in enumerate(model.named_parameters()):
+            assert name in state_dict
+            state_dict[name] = params[i]
+        return state_dict   
     
     def save(self, for_preemption=False):
+        state_dict = self._master_params_to_state_dict(self.model, self.model_params)
         def _maybe_delete_earliest(filename):
             wc = filename.split(f'{(self.step):06d}')[0]+'*'
             freq_states = list(glob.glob(os.path.join(logger.get_dir(), wc)))
@@ -272,7 +283,7 @@ class VAETrainLoop():
             ):
                 self.sample()
 
-            batch, cond = th.cat([next(data) for data in self.data])
+            batch = th.cat([next(data)[0] for data in self.data])
             self.train_step(batch)
  
             # Log incrementally
@@ -322,6 +333,7 @@ def create_argparser():
         weight_lpips=0.002,
         fp16=False,
         log_interval=50,
+        sample_interval=1000,
         save_interval=10_000,
         total_training_steps=100_000,
         resume_checkpoint="",
@@ -398,6 +410,7 @@ def main(args):
             fp16=args.fp16,
             lr_anneal_steps=args.lr_anneal_steps,
             log_interval=args.log_interval,
+            sample_interval=args.sample_interval,
             save_interval=args.save_interval,
             total_training_steps=args.total_training_steps,
             augment=args.augment,
