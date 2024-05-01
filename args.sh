@@ -22,7 +22,7 @@ OUT_CHANNELS=3
 # Arguments
 if [[ $DATASET_NAME == 'vae_fives_patches' ]]; then
     DATA_DIR=/home/datasets/fives512_patches/
-    WORK_DIR=/home/checkpoints/group-diffusion-bridge/
+    WORK_DIR=/home/checkpoints/ddbm/
     DATASET=fives_patches
     DATA_IMG_SIZE=512
     DATA_IMG_CHANNELS=3

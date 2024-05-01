@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=train_ddbm_vae
+#SBATCH --job-name=ddbm_vae
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:yaolianggpu:2 -p YAOLIANG
 #SBATCH --cpus-per-task=4
@@ -12,7 +12,7 @@
 # Launch Python script in background
 echo "Job stared..."
 
-source ./args.sh $DATSET fives $PRED vp $NGPU 2
+source ./args.sh $DATSET vae_fives_patches $PRED vp $NGPU 2
 
 mpiexec --use-hwthread-cpus --oversubscribe -n $NGPU python train_ddbm_incremental.py \
     --work_dir=$WORK_DIR --exp=$EXP --data_dir=$DATA_DIR --dataset=$DATASET \
