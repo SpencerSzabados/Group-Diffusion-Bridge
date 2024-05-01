@@ -14,48 +14,25 @@ SAMPLER=real-uniform
 NUM_RES_BLOCKS=2
 USE_16FP=True
 ATTN_TYPE=flash
-TEST_INTERVAL=5000
+TEST_INTERVAL=10000
 IN_CHANNELS=3
 OUT_CHANNELS=3
 
 
 # Arguments
-if [[ $DATASET_NAME == "e2h" ]]; then
-    DATA_DIR=YOUR_DATASET_PATH
-    DATASET=edges2handbags
-    IMG_SIZE=64
-    NUM_CH=192
-    NUM_RES_BLOCKS=3
-    EXP="e2h${IMG_SIZE}_${NUM_CH}d"
-    SAVE_ITER=100000
-elif [[ $DATASET_NAME == "fives" ]]; then
-    DATA_DIR=/home/datasets/fives64/
-    DATASET=fives
-    IMG_SIZE=64
-    IN_CHANNELS=1
-    OUT_CHANNELS=1
-    NUM_CH=192
-    NUM_RES_BLOCKS=3
-    EXP="h2e_rot90_${DATASET}_${IMG_SIZE}_${IN_CHANNELS}ich_${NUM_CH}ch_${NUM_RES_BLOCKS}b"
-    SAVE_ITER=5000
-elif [[ $DATASET_NAME == 'fives_patches' ]]; then
+if [[ $DATASET_NAME == 'vae_fives_patches' ]]; then
     DATA_DIR=/home/datasets/fives512_patches/
+    WORK_DIR=/home/checkpoints/group-diffusion-bridge/
     DATASET=fives_patches
-    IMG_SIZE=128
-    IN_CHANNELS=1
+    DATA_IMG_SIZE=512
+    DATA_IMG_CHANNELS=3
     OUT_CHANNELS=1
+    EMB_SIZE=64
+    EMB_CHANNELS=4
     NUM_CH=192
     NUM_RES_BLOCKS=3
     EXP="h2e_rot90_${DATASET}_${IMG_SIZE}_${IN_CHANNELS}ich_${NUM_CH}ch_${NUM_RES_BLOCKS}b"
-    SAVE_ITER=5000
-elif [[ $DATASET_NAME == "diode" ]]; then
-    DATA_DIR=YOUR_DATASET_PATH
-    DATASET=diode
-    IMG_SIZE=256
-    SIGMA_MAX=20.0
-    SIGMA_MIN=0.0005
-    EXP="diode${IMG_SIZE}_${NUM_CH}d"
-    SAVE_ITER=20000
+    SAVE_ITER=10000
 fi
     
 
@@ -85,11 +62,13 @@ else
 fi
 
 
-if  [[ $IMG_SIZE == 256 ]]; then
+if  [[ $DATA_IMG_SIZE == 512 ]]; then
+    BS=8
+elif  [[ $DATA_IMG_SIZE == 256 ]]; then
     BS=16
-elif  [[ $IMG_SIZE == 128 ]]; then
+elif  [[ $DATA_IMG_SIZE == 128 ]]; then
     BS=14
-elif  [[ $IMG_SIZE == 64 ]]; then
+elif  [[ $DATA_IMG_SIZE == 64 ]]; then
     BS=30
 else
     echo "Not supported"

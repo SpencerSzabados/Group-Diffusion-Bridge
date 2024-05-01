@@ -33,6 +33,7 @@ from diffusers.models import AutoencoderKL
 def create_argparser():
     defaults = dict(
         data_dir="",
+        work_dir="",
         dataset='edges2handbags',
         schedule_sampler="uniform",
         lr=1e-4,
@@ -40,6 +41,8 @@ def create_argparser():
         lr_anneal_steps=0,
         dice_weight=0.0,
         dice_tol=0.0,
+        data_image_size=-1,
+        data_image_channels=-1,
         global_batch_size=2048,
         batch_size=-1,
         microbatch=-1,  # -1 disables microbatches
@@ -288,7 +291,8 @@ def main(args):
     # Profiler code 
     th.backends.cudnn.benchmark = True
 
-    workdir = get_workdir(args.exp)
+    # workdir = get_workdir(args.exp)
+    workdir = os.path.join(args.work_dir, args.exp)
     Path(workdir).mkdir(parents=True, exist_ok=True)
     
     dist_util.setup_dist()
@@ -296,8 +300,6 @@ def main(args):
     if dist.get_rank() == 0:
         name = args.exp if args.resume_checkpoint == "" else args.exp + '_resume'
         logger.log("creating model and diffusion...")
-    
-    data_image_size = args.image_size
     
     if args.resume_checkpoint == "":
         model_ckpts = list(glob(f'{workdir}/*model*[0-9].*'))
@@ -309,7 +311,7 @@ def main(args):
                     logger.log('Resuming from checkpoint: ', max_ckpt)
 
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae", use_safetensors=False).to(dist_util.dev())
-    checkpoint = th.load(os.path.join(workdir,"vae/model_030000.pt"), map_location=dist_util.dev())
+    checkpoint = th.load(os.path.join(args.work_dir,"vae/model_030000.pt"), map_location=dist_util.dev())
     vae.load_state_dict(checkpoint['model_state_dict'])
 
     model, diffusion = create_model_and_diffusion(
@@ -335,8 +337,8 @@ def main(args):
         data_dir=args.data_dir,
         dataset=args.dataset,
         batch_size=batch_size,
-        image_size=data_image_size,
-        num_channels=args.in_channels,
+        image_size=args.data_image_size,
+        num_channels=args.data_image_channels,
         num_workers=args.num_workers,
     )
     

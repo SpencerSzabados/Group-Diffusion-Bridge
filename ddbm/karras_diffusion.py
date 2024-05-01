@@ -150,6 +150,12 @@ class KarrasDenoiser:
     def training_bridge_losses(self, vae, model, x_start, sigmas, model_kwargs=None, noise=None, mask=None, dice_weight=0, dice_tol=0):
         
         assert model_kwargs is not None
+
+        # Encode inputs 
+        # with th.no_grad():
+        x_start_ = x_start
+        x_start = vae.encode(x_start).latent_dist.mode()
+        model_kwargs["xT"] = vae.encode(model_kwargs['xT']).latent_dist.mode()
         
         if noise is None:
             noise = th.randn_like(x_start) 
@@ -161,11 +167,6 @@ class KarrasDenoiser:
             # noise = noise*mask
             model_kwargs['xT'] =  model_kwargs['xT']*mask
             x_start = x_start*mask
-
-        with th.no_grad():
-            x_start_ = x_start
-            x_start = vae.encode(x_start).latent_dist.mode()
-            model_kwargs["xT"] = vae.encode(model_kwargs['xT']).latent_dist.mode()
 
         print(x_start.shape)
 
@@ -203,10 +204,17 @@ class KarrasDenoiser:
             model_output = model_output*mask
             denoised = denoised*mask
 
-        with th.no_grad():
-            model_output = vae.decode(model_output).sample
-            denoised = vae.decode(denoised).sample
-            x_start = x_start_
+        # Decode model outputs
+        # with th.no_grad():
+        model_output = vae.decode(model_output).sample
+        denoised = vae.decode(denoised).sample
+        x_start = x_start_
+
+        # Average all channels for computing loss 
+        # TODO: add launch command flag
+        model_output = model_output.mean(dim=1, keepdim=True)
+        denoised = denoised.mean(dim=1, keepdim=True)
+        x_start = x_start.mean(dim=1, keepdim=True)
 
         # Compute DICE regularization loss term 
         dice_loss = 0
@@ -215,15 +223,6 @@ class KarrasDenoiser:
             norm_x_start = x_start.clamp(0,1)
             # dice_loss = 1. - 2.*mean_flat(norm_denoised*norm_x_start+1e-8)/(mean_flat(norm_denoised)+mean_flat(norm_x_start)+1e-8)
             dice_loss = 1. - 2.*mean_flat(norm_denoised*x_start)/(mean_flat(denoised)+mean_flat(x_start)+1e-8)
-
-        # TODO: Remove - code only for debugging DICE loss.
-        # th.set_printoptions(threshold=10000)
-        # print(denoised[0])
-        # print(x_start[0])
-        # print((norm_denoised*norm_x_start)[0])
-        # gathered = th.cat((xT, x_start, denoised, norm_denoised, (norm_denoised>=0.5).float()),0)
-        # grid_img = torchvision.utils.make_grid(gathered, nrow=len(x_start), normalize=False)
-        # torchvision.utils.save_image(grid_img, f'tmp_imgs/debug_dice.pdf')
 
         weights = self.get_weightings(sigmas)
         weights = append_dims((weights), dims)
