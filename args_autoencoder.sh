@@ -26,7 +26,7 @@ if [[ $DATASET == "NAME" ]]; then
     SAVE_INTERVAL=100000
 elif [[ $DATASET == "fives" ]]; then
     WORK_DIR=/u6/sszabado/checkpoints/ddbm/vae/
-    DATA_DIR=/u6/sszabado/datasets/fives512_patches/train/all/
+    DATA_DIR=/u6/sszabado/datasets/fives512_patches/train/images/,/u6/sszabado/datasets/fives512_patches/train/masks/
     IMAGE_SIZE=512
     USE_16FP=True
 else
@@ -36,7 +36,7 @@ fi
 
 
 if [[ $IMAGE_SIZE == 512 ]]; then
-    BATCH_SIZE=8
+    BATCH_SIZE=4
 elif  [[ $IMAGE_SIZE == 256 ]]; then
     BATCH_SIZE=16
 elif  [[ $IMAGE_SIZE == 128 ]]; then

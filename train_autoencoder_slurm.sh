@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32GB
 #SBATCH --signal=B:USR1@30
-#SBATCH --time=06:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=%x.out
 #SBATCH --error=%x.err
 
@@ -18,7 +18,7 @@ mpiexec --use-hwthread-cpus --oversubscribe -n $NGPU python train_autoencoder.py
     --workdir $WORK_DIR --data_dir $DATA_DIR --image_size $IMAGE_SIZE --global_batch_size $BATCH_SIZE \
     --lr $LR --ema_rate $EMA_RATE --weight_decay $WEIGHT_DECAY --lr_anneal_steps $LR_ANNEAL_STEPS \
     --log_interval $LOG_INTERVAL --save_interval $SAVE_INTERVAL --total_training_steps $TOTAL_TRAINING_STEPS \
-    --augment $AUG --ngpu 1 --fp16 $USE_16FP 
+    --augment $AUG --ngpu 1 --fp16 $USE_16FP &
 
 # Capture the PID of the Python process
 PID=$!

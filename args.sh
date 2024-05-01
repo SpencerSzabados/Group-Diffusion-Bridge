@@ -2,7 +2,7 @@
 BS=64
 DATASET_NAME=$1
 PRED=$2
-NGPU=2
+NGPU=$3
 SIGMA_MAX=80.0
 SIGMA_MIN=0.002
 SIGMA_DATA=0.5
@@ -39,7 +39,7 @@ elif [[ $DATASET_NAME == "fives" ]]; then
     EXP="h2e_rot90_${DATASET}_${IMG_SIZE}_${IN_CHANNELS}ich_${NUM_CH}ch_${NUM_RES_BLOCKS}b"
     SAVE_ITER=5000
 elif [[ $DATASET_NAME == 'fives_patches' ]]; then
-    DATA_DIR=/home/datasets/fives_patches128/
+    DATA_DIR=/home/datasets/fives512_patches/
     DATASET=fives_patches
     IMG_SIZE=128
     IN_CHANNELS=1

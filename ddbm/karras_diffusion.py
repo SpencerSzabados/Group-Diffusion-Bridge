@@ -147,7 +147,7 @@ class KarrasDenoiser:
             return c_skip, c_out, c_in
         
 
-    def training_bridge_losses(self, model, x_start, sigmas, model_kwargs=None, noise=None, vae=None, mask=None, dice_weight=0, dice_tol=0):
+    def training_bridge_losses(self, vae, model, x_start, sigmas, model_kwargs=None, noise=None, mask=None, dice_weight=0, dice_tol=0):
         
         assert model_kwargs is not None
         
@@ -161,6 +161,13 @@ class KarrasDenoiser:
             # noise = noise*mask
             model_kwargs['xT'] =  model_kwargs['xT']*mask
             x_start = x_start*mask
+
+        with th.no_grad():
+            x_start_ = x_start
+            x_start = vae.encode(x_start).latent_dist.mode()
+            model_kwargs["xT"] = vae.encode(model_kwargs['xT']).latent_dist.mode()
+
+        print(x_start.shape)
 
         xT = model_kwargs['xT']
 
@@ -192,15 +199,16 @@ class KarrasDenoiser:
 
         model_output, denoised = self.denoise(model, x_t, sigmas,  **model_kwargs)
 
-        # if self.clip_denoised:
-            # denoised = denoised.clamp(-1, 1)
-
         if mask[0] != -1 and mask is not None:
             model_output = model_output*mask
             denoised = denoised*mask
 
+        with th.no_grad():
+            model_output = vae.decode(model_output).sample
+            denoised = vae.decode(denoised).sample
+            x_start = x_start_
+
         # Compute DICE regularization loss term 
-            # Added DICE++ loss and softmax thresholding 
         dice_loss = 0
         if dice_weight > 0:
             norm_denoised = denoised.clamp(0,1)
@@ -208,7 +216,7 @@ class KarrasDenoiser:
             # dice_loss = 1. - 2.*mean_flat(norm_denoised*norm_x_start+1e-8)/(mean_flat(norm_denoised)+mean_flat(norm_x_start)+1e-8)
             dice_loss = 1. - 2.*mean_flat(norm_denoised*x_start)/(mean_flat(denoised)+mean_flat(x_start)+1e-8)
 
-        # TODO: Remote - code only for debugging DICE loss.
+        # TODO: Remove - code only for debugging DICE loss.
         # th.set_printoptions(threshold=10000)
         # print(denoised[0])
         # print(x_start[0])
@@ -221,7 +229,8 @@ class KarrasDenoiser:
         weights = append_dims((weights), dims)
         terms["xs_mse"] = mean_flat((denoised - x_start) ** 2)
         terms["mse"] = mean_flat(weights * (denoised - x_start) ** 2)
-        terms["dice"] = dice_loss
+        terms["xs_dice"] = dice_loss
+        terms["dice"] = weights*dice_loss
 
         if "vb" in terms:
             terms["loss"] = terms['mse'] + terms["vb"] + dice_weight*terms["dice"]
@@ -231,7 +240,6 @@ class KarrasDenoiser:
     
 
     def denoise(self, model, x_t, sigmas ,**model_kwargs):
-
         c_skip, c_out, c_in = [
             append_dims(x, x_t.ndim) for x in self.get_bridge_scalings(sigmas)
         ]

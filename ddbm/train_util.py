@@ -35,6 +35,7 @@ class TrainLoop:
     def __init__(
         self,
         *,
+        vae,
         model,
         diffusion,
         train_data,
@@ -58,6 +59,7 @@ class TrainLoop:
         augment_pipe=None,
         **sample_kwargs,
     ):
+        self.vae = vae
         self.model = model
         self.diffusion = diffusion
         self.data = train_data
@@ -285,23 +287,23 @@ class TrainLoop:
 
     # TODO: make dice and dice_tol arguments rather than hard coded values
     def forward_backward(self, batch, cond, mask=None, dice_weight=1, dice_tol=0.5, train=True):
-        if train:
-            self.mp_trainer.zero_grad()
-
         if mask[0] != -1 and mask is not None:
             mask = mask.to(dist_util.dev())
+
+        if train:
+            self.mp_trainer.zero_grad()
 
         for i in range(0, batch.shape[0], self.microbatch):
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
             micro_cond = {
-                k: v[i : i + self.microbatch].to(dist_util.dev())
-                for k, v in cond.items()
-            }
+                k: v[i : i + self.microbatch].to(dist_util.dev()) for k, v in cond.items()
+            } 
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
 
             compute_losses = functools.partial(
                 self.diffusion.training_bridge_losses,
+                self.vae,
                 self.ddp_model,
                 micro,
                 t,

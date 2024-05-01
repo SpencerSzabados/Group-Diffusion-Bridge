@@ -27,6 +27,8 @@ from ddbm.karras_diffusion import karras_sample
 from ddbm.nn import mean_flat, append_dims, append_zero
 from tqdm import tqdm
 
+from diffusers.models import AutoencoderKL
+
 
 def create_argparser():
     defaults = dict(
@@ -306,6 +308,9 @@ def main(args):
                 if dist.get_rank() == 0:
                     logger.log('Resuming from checkpoint: ', max_ckpt)
 
+    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae", use_safetensors=False).to(dist_util.dev())
+    checkpoint = th.load(os.path.join(workdir,"vae/model_030000.pt"), map_location=dist_util.dev())
+    vae.load_state_dict(checkpoint['model_state_dict'])
 
     model, diffusion = create_model_and_diffusion(
         **args_to_dict(args, model_and_diffusion_defaults().keys())
@@ -344,6 +349,7 @@ def main(args):
         
     logger.log("training...")
     trainloop = TrainLoop(
+        vae=vae,
         model=model,
         diffusion=diffusion,
         train_data=data,
@@ -377,8 +383,8 @@ def main(args):
             step, ema_rate = trainloop.run_loop()
             # Compute model metrics
             model.eval()
-            training_sample(diffusion, model, test_data, 10, step, args)
-            calculate_metrics(diffusion, model, test_data, step, args)
+            training_sample(diffusion, model, vae, test_data, 10, step, args)
+            calculate_metrics(diffusion, model, vae, test_data, step, args)
             model.train()
         else:
             trainloop.run_loop()

@@ -383,7 +383,7 @@ def main(args):
         batch_size = args.batch_size
 
     data = [load_data(
-        data_dir=args.data_dir,
+        data_dir=data_dir,
         batch_size=batch_size,
         image_size=args.image_size,
         num_workers=args.ngpu,
