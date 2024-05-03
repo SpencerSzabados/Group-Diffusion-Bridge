@@ -14,25 +14,27 @@ SAMPLER=real-uniform
 NUM_RES_BLOCKS=2
 USE_16FP=True
 ATTN_TYPE=flash
-TEST_INTERVAL=10000
+TEST_INTERVAL=20000
+SAVE_ITER=20000
 IN_CHANNELS=3
 OUT_CHANNELS=3
 
 
 # Arguments
 if [[ $DATASET_NAME == 'vae_fives_patches' ]]; then
-    DATA_DIR=/home/datasets/fives512_patches/
-    WORK_DIR=/home/checkpoints/ddbm/
+    DATA_DIR=/u6/sszabado/datasets/fives512_patches/
+    WORK_DIR=/u6/sszabado/checkpoints/ddbm/
     DATASET=fives_patches
     DATA_IMG_SIZE=512
     DATA_IMG_CHANNELS=3
     OUT_CHANNELS=1
     EMB_SIZE=64
     EMB_CHANNELS=4
-    NUM_CH=192
-    NUM_RES_BLOCKS=3
+    NUM_CH=128
+    NUM_RES_BLOCKS=2
+    DICE_TOL=0.5
+    DICE_WEIGHT=0.0
     EXP="h2e_rot90_${DATASET}_${IMG_SIZE}_${IN_CHANNELS}ich_${NUM_CH}ch_${NUM_RES_BLOCKS}b"
-    SAVE_ITER=10000
 fi
     
 
@@ -63,7 +65,8 @@ fi
 
 
 if  [[ $DATA_IMG_SIZE == 512 ]]; then
-    BS=8
+    BS=6
+    MICRO=-1
 elif  [[ $DATA_IMG_SIZE == 256 ]]; then
     BS=16
 elif  [[ $DATA_IMG_SIZE == 128 ]]; then

@@ -10,6 +10,7 @@ import numpy as np
 import torch as th
 import torch.distributed as dist
 import torchvision
+from torch.cuda.amp import autocast
 from ddbm import dist_util, logger
 from datasets import load_data
 from datasets.augment import AugmentPipe
@@ -70,11 +71,11 @@ def preprocess(x):
     Preprocessing function taken from train_util.py
     """    
     if x.shape[1] == 3:
-        x =  x * 2 - 1
+        x =  2.*x - 1.
     return x
 
 
-def training_sample(diffusion, model, data, num_samples, step, args):
+def training_sample(diffusion, model, vae, data, num_samples, step, args):
     """
     Generates a small selection of samples after pausing training of ddbm model. 
     Intended to be used for visual confirmation of training progress.
@@ -92,6 +93,12 @@ def training_sample(diffusion, model, data, num_samples, step, args):
     |   MSE     |
     +-----------+
     """
+    # Move models to seperate gpus due to memory restictions 
+    print("Generating training smaple...")
+    print("Moving models to different devices...")
+    vae.to("cuda:1")
+    model.to("cuda:0")
+    
     test_batch, test_cond, _, mask = next(iter(data))
     batch_size = len(test_batch)
 
@@ -104,115 +111,138 @@ def training_sample(diffusion, model, data, num_samples, step, args):
     if mask[0] != -1 and mask is not None:
         mask = mask[0:num_samples]
 
-    test_batch = preprocess(test_batch) # TODO: removed for testing
+    test_batch = preprocess(test_batch)
 
     # Mask input if mask exists
     if mask[0] != -1 and mask is not None:
         test_batch = (test_batch*mask)
 
     if isinstance(test_cond, th.Tensor) and test_batch.ndim == test_cond.ndim:
-        test_xT = preprocess(test_cond) # TODO: removed for testing
-        # test_xT = test_cond
+        test_xT = preprocess(test_cond)
         if mask[0] != -1 and mask is not None:
             test_xT = (test_xT*mask)
         test_cond = {'xT': test_xT}
     else:
-        test_cond['xT'] = preprocess(test_cond['xT']) # TODO: removed for testing
-        # test_cond['xT'] = test_cond['xT']
+        test_cond['xT'] = preprocess(test_cond['xT'])
 
-    logger.log("Generating samples...")
-    gathered = th.cat((test_xT,test_batch),0)
-    # normalize values of gathered to the same scale as the model output 
-    gathered = gathered/2. + 1
-    sample, path, nfe = karras_sample(
-        diffusion,
-        model,
-        test_xT.to(dist_util.dev()),
-        test_batch.to(dist_util.dev()),
-        steps=40,
-        model_kwargs={'xT': test_xT.to(dist_util.dev())},
-        device=dist_util.dev(),
-        clip_denoised=True,
-        sampler='heun',
-        sigma_min=args.sigma_min,
-        sigma_max=args.sigma_max,
-        guidance=1
-    )
+    with th.no_grad():
+    # Pass data into encoder
+        with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
+            with autocast(dtype=th.float32):
+                emb_test_batch = vae.encode(test_batch).latent_dist.mode()
+                emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
+
+        logger.log("Generating samples...")
+        
+        gathered = th.cat((test_xT,test_batch),0).to("cuda:0")
+        # normalize values of gathered to the same scale as the model output 
+
+        with th.cuda.device('cuda:0'):
+            emb_sample, path, nfe = karras_sample(
+                diffusion,
+                model,
+                emb_test_xT,
+                emb_test_batch,
+                steps=40,
+                model_kwargs={'xT': emb_test_xT},
+                clip_denoised=True,
+                sampler='heun',
+                sigma_min=args.sigma_min,
+                sigma_max=args.sigma_max,
+                guidance=1
+            )
+        with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
+            with autocast(dtype=th.float32):
+                sample = vae.decode(emb_sample).sample
     sample = sample.contiguous().detach().cpu()
 
     if mask[0] != -1 and mask is not None:
         sample = sample*mask
 
-    if th.min(test_batch) <= 0 or th.max(test_batch) >= 1:
-        test_batch = (test_batch+1.)/2.
-    if th.min(test_xT) <= 0. or th.max(test_xT) >= 1.:
-        test_xT = (test_xT+1.)/2.
-    if th.min(sample) <= 0. or th.max(sample) >= 1.:
-        sample = (sample+1.)/2.
+    # if th.min(test_batch) <= 0 or th.max(test_batch) >= 1:
+    #     test_batch = (test_batch+1.)/2.
+    # if th.min(test_xT) <= 0. or th.max(test_xT) >= 1.:
+    #     test_xT = (test_xT+1.)/2.
+    # if th.min(sample) <= 0. or th.max(sample) >= 1.:
+    #     sample = (sample+1.)/2.
 
-    gathered = th.cat((gathered,sample),0)
+    gathered = th.cat((gathered, sample), 0)
     # Compute solution difference
-    sample_difference = test_batch-sample
-    gathered = th.cat((gathered,sample_difference),0)
+    sample_difference = th.abs(test_batch-sample)
+    gathered = th.cat((gathered, sample_difference), 0)
     # Save the generated sample images
     logger.log("Sampled tensor shape: "+str(sample.shape))
     grid_img = torchvision.utils.make_grid(gathered, nrow=num_samples, normalize=True, scale_each=True)
     torchvision.utils.save_image(grid_img, f'tmp_imgs/{step}.pdf')
 
 
-def calculate_metrics(diffusion, model, data, step, args, num_samples=1000):
+def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000):
     """
     Draws a random sample of conditional images from the test dataset and generates
     samples from these in order to compute the F1 (Dice) score of the model. This is
     used for image segementation accuracy evaluation.
     """
+    # Move models to seperate gpus due to memory restictions 
+    print("Generating smaples...")
+    print("Moving models to different devices...")
+    vae.to("cuda:1")
+    model.to("cuda:0")
 
-    def __sample():
+
+    def _sample():
         """
         Generate a large set of sample images from model for use in computing metrics.
         """
         test_batch, test_cond, _, mask = next(iter(data))   
 
-        test_batch = preprocess(test_batch) # TODO: removed for testing
+        test_batch = preprocess(test_batch)
 
         # Mask input if mask exists
         if mask[0] != -1 and mask is not None:
             test_batch = (test_batch*mask)
 
         if isinstance(test_cond, th.Tensor) and test_batch.ndim == test_cond.ndim:
-            test_xT = preprocess(test_cond) # TODO: removed for testing
+            test_xT = preprocess(test_cond)
             # test_xT = test_cond
             if mask[0] != -1 and mask is not None:
                 test_xT = (test_xT*mask)
             test_cond = {'xT': test_xT}
         else:
-            test_cond['xT'] = preprocess(test_cond['xT']) # TODO: removed for testing
+            test_cond['xT'] = preprocess(test_cond['xT'])
             # test_cond['xT'] = test_cond['xT']
 
-        gathered = th.cat((test_xT,test_batch),0)
-        # normalize values of gathered to the same scale as the model output 
-        gathered = gathered/2. + 1
-        sample, path, nfe = karras_sample(
-            diffusion,
-            model,
-            test_xT.to(dist_util.dev()),
-            test_batch.to(dist_util.dev()),
-            steps=40,
-            model_kwargs={'xT': test_xT.to(dist_util.dev())},
-            device=dist_util.dev(),
-            clip_denoised=True,
-            sampler='heun',
-            sigma_min=args.sigma_min,
-            sigma_max=args.sigma_max,
-            guidance=1
-        )
+        with th.no_grad():
+            # Pass data into encoder
+            with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
+                with autocast(dtype=th.float32):
+                    emb_test_batch = vae.encode(test_batch).latent_dist.mode()
+                    emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
+
+            with th.cuda.device('cuda:0'):  # Move processing back to GPU(0)
+                emb_sample, path, nfe = karras_sample(
+                    diffusion,
+                    model,
+                    emb_test_xT,
+                    emb_test_batch,
+                    steps=40,
+                    model_kwargs={'xT': emb_test_xT},
+                    clip_denoised=True,
+                    sampler='heun',
+                    sigma_min=args.sigma_min,
+                    sigma_max=args.sigma_max,
+                    guidance=1
+                )
+            with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
+                with autocast(dtype=th.float32):
+                    sample = vae.decode(emb_sample).sample
         sample = sample.contiguous().detach().cpu()
-        sample = sample*mask
-        # sample = (sample+1.)/2.
+
+        if mask[0] != -1 and mask is not None:
+            sample = sample*mask
 
         return sample, test_xT, mask
 
-    def __compute_scores(gen_img, ref_img):
+    def _compute_scores(gen_img, ref_img):
         """
         Function computes the f1 dice loss between a generated image (mask) and the reference image
         """
@@ -227,13 +257,23 @@ def calculate_metrics(diffusion, model, data, step, args, num_samples=1000):
             # ref_img = (ref_img+1.)/2.
             ref_img = ref_img.clamp(0,1)
             assert th.min(ref_img) >= 0. and th.max(ref_img) <= 1.
+
         # Compute MSE
         mse_loss = mean_flat((gen_img-ref_img)**2)
+
         # Compute DICE loss
+        # Test if images are single channel and if not convert them to single channel by averaging
+        if gen_img.shape[1] == 3:
+            ref_img = ref_img.mean(dim=1, keepdim=True)
+            gen_img = gen_img.mean(dim=1, keepdim=True)
+        elif gen_img.shape[1] > 3:
+            raise ValueError(f"Number of output channels must be either {1} or {3}.")
+        
         dice = 2.*mean_flat(gen_img*ref_img+1e-8)/(mean_flat(gen_img)+mean_flat(ref_img)+1e-8)
         gen_img_bin = (gen_img >= 0.5).float()
         ref_img_bin = (ref_img >= 0.5).float()
         dice_tol = 2.*mean_flat(gen_img_bin*ref_img_bin+1e-8)/(mean_flat(gen_img_bin)+mean_flat(ref_img_bin)+1e-8)
+        
         # Compute accuracy 
         I = th.ones_like(ref_img)
         tp = mean_flat(gen_img_bin*ref_img_bin)
@@ -268,8 +308,8 @@ def calculate_metrics(diffusion, model, data, step, args, num_samples=1000):
 
     for i in tqdm(range(1,(num_inter+1))):
         # Generate samples from model to compute f1 score against and fid
-        sample, target, mask = __sample()
-        scores = __compute_scores(sample, target)
+        sample, target, mask = _sample()
+        scores = _compute_scores(sample, target)
         # update averages 
         gathered_scores["mse"] = ((i-1)/i)*gathered_scores["mse"] + scores["mse"]/i
         gathered_scores["dice"] = ((i-1)/i)*gathered_scores["dice"] + scores["dice"]/i
@@ -311,8 +351,11 @@ def main(args):
                     logger.log('Resuming from checkpoint: ', max_ckpt)
 
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae", use_safetensors=False).to(dist_util.dev())
-    checkpoint = th.load(os.path.join(args.work_dir,"vae/model_030000.pt"), map_location=dist_util.dev())
-    vae.load_state_dict(checkpoint['model_state_dict'])
+    checkpoint = th.load(os.path.join(args.work_dir,"vae/model_020000.pt"), map_location=dist_util.dev())
+    vae.load_state_dict(checkpoint)
+
+    vae.eval()
+    vae.half() # TODO: Added to debug gpu memory usage.
 
     model, diffusion = create_model_and_diffusion(
         **args_to_dict(args, model_and_diffusion_defaults().keys())
@@ -360,6 +403,8 @@ def main(args):
         microbatch=args.microbatch,
         lr=args.lr,
         ema_rate=args.ema_rate,
+        dice_weight=args.dice_weight,
+        dice_tol=args.dice_tol,
         log_interval=args.log_interval,
         test_interval=args.test_interval,
         save_interval=args.save_interval,
@@ -377,18 +422,19 @@ def main(args):
 
     # Train model incrementally 
     while True:
-        # TODO: Assert is added to ensure model is saved and resumed after sampling 
-        #       rather than having to chaning the TrainLoop class to accept new input.
-        # assert args.test_interval == 0 or args.test_interval > args.save_interval
-
-        if args.test_interval > 0:
+        if th.cuda.device_count() >= 2:
             step, ema_rate = trainloop.run_loop()
             # Compute model metrics
+            th.cuda.empty_cache()
             model.eval()
-            training_sample(diffusion, model, vae, test_data, 10, step, args)
+            training_sample(diffusion, model, vae, test_data, 2, step, args)
             calculate_metrics(diffusion, model, vae, test_data, step, args)
             model.train()
+            # Training and metric computations scripts move models off devices 
+            vae.to(dist_util.dev())
+            model.to(dist_util.dev())
         else:
+            logger.log("Incremental smapling is not supported on fewer than 2 gpus. Proceeding without incremental sampling.")
             trainloop.run_loop()
 
 

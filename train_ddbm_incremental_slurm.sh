@@ -12,6 +12,8 @@
 # Launch Python script in background
 echo "Job stared..."
 
+source activate ddbm
+
 source ./args.sh $DATSET vae_fives_patches $PRED vp $NGPU 2
 
 mpiexec --use-hwthread-cpus --oversubscribe -n $NGPU python train_ddbm_incremental.py \
@@ -27,11 +29,11 @@ mpiexec --use-hwthread-cpus --oversubscribe -n $NGPU python train_ddbm_increment
     --weight_schedule bridge_karras\
     ${BETA_D:+ --beta_d="${BETA_D}"} ${BETA_MIN:+ --beta_min="${BETA_MIN}"}  \
     ${CH_MULT:+ --channel_mult="${CH_MULT}"} \
-    --num_workers=8 --sigma_data $SIGMA_DATA --sigma_max=$SIGMA_MAX --sigma_min=$SIGMA_MIN --cov_xy $COV_XY \
+    --num_workers=$NGPU --sigma_data $SIGMA_DATA --sigma_max=$SIGMA_MAX --sigma_min=$SIGMA_MIN --cov_xy $COV_XY \
     --test_interval=$TEST_INTERVAL --save_interval=$SAVE_ITER \
     --debug=False \
     ${CKPT:+ --resume_checkpoint="${CKPT}"} \
-    --dice_weight 0.5 --dice_tol 0.5
+    --dice_weight $DICE_WEIGHT --dice_tol $DICE_TOL &
 
 # Capture the PID of the Python process
 PID=$!

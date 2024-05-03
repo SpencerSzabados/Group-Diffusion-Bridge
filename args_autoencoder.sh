@@ -13,9 +13,9 @@ WEIGHT_DECAY=0.0
 LR_ANNEAL_STEPS=0
 USE_16FP=False
 LOG_INTERVAL=500
-SAMPLE_INTERVAL=1000
-SAVE_INTERVAL=10000
-TOTAL_TRAINING_STEPS=100000
+SAMPLE_INTERVAL=20000
+SAVE_INTERVAL=20000
+TOTAL_TRAINING_STEPS=200000
 AUG=0
 
 
@@ -28,7 +28,7 @@ elif [[ $DATASET == "fives" ]]; then
     WORK_DIR=/u6/sszabado/checkpoints/ddbm/vae/
     DATA_DIR=/u6/sszabado/datasets/fives512_patches/train/images/,/u6/sszabado/datasets/fives512_patches/train/masks/
     IMAGE_SIZE=512
-    USE_16FP=True
+    USE_16FP=False
 else
     echo "Not supported"
     exit 1    
@@ -36,7 +36,7 @@ fi
 
 
 if [[ $IMAGE_SIZE == 512 ]]; then
-    BATCH_SIZE=4
+    BATCH_SIZE=2
 elif  [[ $IMAGE_SIZE == 256 ]]; then
     BATCH_SIZE=16
 elif  [[ $IMAGE_SIZE == 128 ]]; then

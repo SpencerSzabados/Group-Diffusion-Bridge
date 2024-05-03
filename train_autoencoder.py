@@ -19,7 +19,6 @@ import blobfile as bf
 import argparse
 import numpy as np
 import torch as th
-from torch.cuda.amp import autocast, GradScaler
 import torch.distributed as dist
 import torchvision
 from torch.optim import RAdam
@@ -93,20 +92,19 @@ class VAETrainLoop():
             self.model_params, lr=self.lr, weight_decay=self.weight_decay
         )
         self.fp16 = fp16
-        self.scaler = GradScaler()
         self.loss_fn_l2 = th.nn.MSELoss()
         self.loss_fn_lpips = lpips.LPIPS().to(dist_util.dev())
 
         if self.resume_checkpoint != "":
             self.resume_step = self._parse_resume_step_from_filename(resume_checkpoint)
+            self.step = self.resume_step
             if dist.get_rank() == 0:
                 logger.log(f"loading model from checkpoint: {resume_checkpoint}...")
                 logger.log('Resume step: ', self.resume_step)
                 
-            checkpoint = th.load(self.resume_checkpoint, map_location=dist_util.dev())
-            self.model.load_state_dict(checkpoint['model_state_dict'])
-            self.opt.load_state_dict(checkpoint['optimizer_state_dict'])
-            self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            self.model.load_state_dict(
+                th.load(resume_checkpoint, map_location=dist_util.dev()),
+            )
 
             dist.barrier()
 
@@ -116,7 +114,6 @@ class VAETrainLoop():
     def _sig_handler(self, signum, frame):
         logger.log(f"Recived SLURM SIGNAL {signum}, stopping up training...")
         self.save()
-        exit(0)
 
     def _parse_resume_step_from_filename(self, filename):
         """
@@ -141,7 +138,6 @@ class VAETrainLoop():
         return state_dict   
     
     def save(self, for_preemption=False):
-        state_dict = self._master_params_to_state_dict(self.model, self.model_params)
         def _maybe_delete_earliest(filename):
             wc = filename.split(f'{(self.step):06d}')[0]+'*'
             freq_states = list(glob.glob(os.path.join(logger.get_dir(), wc)))
@@ -149,7 +145,8 @@ class VAETrainLoop():
                 earliest = min(freq_states, key=lambda x: x.split('_')[-1].split('.')[0])
                 os.remove(earliest)     
 
-        def _save_checkpoint(for_preemption):
+        def _save_checkpoint(params, for_preemption):
+            state_dict = self._master_params_to_state_dict(self.model, self.model_params)
             if dist.get_rank() == 0:
                 logger.log(f"saving model {self.step}...")
                 filename = f"model_{(self.step):06d}.pt"
@@ -161,16 +158,9 @@ class VAETrainLoop():
                 with bf.BlobFile(bf.join(logger.get_dir(), filename), "wb") as f:
                     th.save(state_dict, f)
 
-                with bf.BlobFile(bf.join(logger.get_dir(), filename), "wb") as f:
-                    th.save({
-                        'model_state_dict': self.model.state_dict(),
-                        'optimizer_state_dict': self.opt.state_dict(),
-                        'scaler_state_dict': self.scaler.state_dict(),
-                        }, f)
-
         # Save model parameters last to prevent race conditions where a restart
         # loads model at step N, but opt/ema state isn't saved for step N.
-        _save_checkpoint(for_preemption)
+        _save_checkpoint(self.model_params, for_preemption)
         dist.barrier()
 
     def _log_step(self, loss_terms):
@@ -207,14 +197,14 @@ class VAETrainLoop():
 
         batch = th.cat([next(data)[0] for data in self.data])
         batch = batch.to(dist_util.dev())
-        x_hat = self.forward(batch)
+        x_hat = self.forward(batch, sample=False)
         sample_grid = th.cat([batch, x_hat], dim=0)
 
         sample_dir = bf.join(logger.get_dir(), "samples")
         if dist.get_rank() == 0:
             os.makedirs(sample_dir, exist_ok=True)
             
-        torchvision.utils.save_image( (sample_grid+1.)/2., bf.join(sample_dir, f"{self.step}.png"), nrow=batch.shape[0])       
+        torchvision.utils.save_image((sample_grid+1.)/2., bf.join(sample_dir, f"{self.step}.png"), nrow=batch.shape[0])       
 
         self.model.train()
 
@@ -243,21 +233,9 @@ class VAETrainLoop():
 
         batch = batch.to(dist_util.dev())
         
-        if self.fp16:
-            with autocast():
-                loss, loss_terms = _compute_losses(batch)
-            # Scales loss, calls backward() on scaled loss to create scaled gradients.
-            self.scaler.scale(loss).backward()
-            # scaler.step() first unscales the gradients of the optimizer's assigned params.
-            # If these gradients do not contain infs or NaNs, optimizer.step() is then called,
-            # otherwise, optimizer.step() is skipped.
-            self.scaler.step(self.opt)
-            # Updates the scale for next iteration.
-            self.scaler.update()
-        else:
-            loss, loss_terms = _compute_losses(batch)
-            loss.backward()
-            self.opt.step()
+        loss, loss_terms = _compute_losses(batch)
+        loss.backward()
+        self.opt.step()
 
         # self._update_ema() # TODO: add ema and lr rate adjustments later
         # self._anneal_lr()
@@ -339,7 +317,7 @@ def create_argparser():
         total_training_steps=100_000,
         resume_checkpoint="",
         augment=False,
-        ngpu=1,
+        num_workers=1,
     )
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)
@@ -386,7 +364,7 @@ def main(args):
         data_dir=data_dir,
         batch_size=batch_size,
         image_size=args.image_size,
-        num_workers=args.ngpu,
+        num_workers=args.num_workers,
         class_cond=False,
     ) for data_dir in args.data_dir.split(",")]
     
@@ -415,7 +393,7 @@ def main(args):
             save_interval=args.save_interval,
             total_training_steps=args.total_training_steps,
             augment=args.augment,
-            num_workers=args.ngpu
+            num_workers=args.num_workers
         )
     
     logger.log("Training...")

@@ -6,6 +6,7 @@ import numpy as np
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.cuda.amp import autocast
 import torchvision
 from piq import LPIPS
 
@@ -152,10 +153,10 @@ class KarrasDenoiser:
         assert model_kwargs is not None
 
         # Encode inputs 
-        # with th.no_grad():
-        x_start_ = x_start
-        x_start = vae.encode(x_start).latent_dist.mode()
-        model_kwargs["xT"] = vae.encode(model_kwargs['xT']).latent_dist.mode()
+        with autocast(dtype=th.float16):
+            x_start_ = x_start
+            x_start = vae.encode(x_start).latent_dist.mode()
+            model_kwargs['xT'] = vae.encode(model_kwargs['xT']).latent_dist.mode()
         
         if noise is None:
             noise = th.randn_like(x_start) 
@@ -167,8 +168,6 @@ class KarrasDenoiser:
             # noise = noise*mask
             model_kwargs['xT'] =  model_kwargs['xT']*mask
             x_start = x_start*mask
-
-        print(x_start.shape)
 
         xT = model_kwargs['xT']
 
@@ -204,17 +203,17 @@ class KarrasDenoiser:
             model_output = model_output*mask
             denoised = denoised*mask
 
-        # Decode model outputs
-        # with th.no_grad():
-        model_output = vae.decode(model_output).sample
-        denoised = vae.decode(denoised).sample
-        x_start = x_start_
-
-        # Average all channels for computing loss 
-        # TODO: add launch command flag
-        model_output = model_output.mean(dim=1, keepdim=True)
-        denoised = denoised.mean(dim=1, keepdim=True)
-        x_start = x_start.mean(dim=1, keepdim=True)
+        # # Decode model outputs
+        # # TODO: This code is commented out to perform gradient updates of diffusion model
+          #       within the latent space only.
+        # with autocast(dtype=th.float16):
+        #     model_output = vae.decode(model_output).sample
+        #     denoised = vae.decode(denoised).sample
+        #     x_start = x_start_
+        # # Average all channels for computing loss 
+        # model_output = model_output.mean(dim=1, keepdim=True)
+        # denoised = denoised.mean(dim=1, keepdim=True)
+        # x_start = x_start.mean(dim=1, keepdim=True)
 
         # Compute DICE regularization loss term 
         dice_loss = 0
@@ -228,9 +227,16 @@ class KarrasDenoiser:
         weights = append_dims((weights), dims)
         terms["xs_mse"] = mean_flat((denoised - x_start) ** 2)
         terms["mse"] = mean_flat(weights * (denoised - x_start) ** 2)
-        terms["xs_dice"] = dice_loss
-        terms["dice"] = weights*dice_loss
+        if dice_weight > 0:
+            terms["xs_dice"] = mean_flat(dice_loss)
+            terms["dice"] = mean_flat(weights*dice_loss)
+        else:
+            terms["xs_dice"] = 0
+            terms["dice"] = 0
 
+        # TODO: Debug - remove "+ dice_weight*terms["dice"]" term from loss as this 
+        #       cannot be computed in the vae latent space. Currently I am just setting
+        #       "dice_weight = 0" in arguments to avoid removing the code.
         if "vb" in terms:
             terms["loss"] = terms['mse'] + terms["vb"] + dice_weight*terms["dice"]
         else:
@@ -270,7 +276,6 @@ def karras_sample(
     assert sampler in ["heun", ], 'only heun sampler is supported currently'
     
     sigmas = get_sigmas_karras(steps, sigma_min, sigma_max-1e-4, rho, device=device)
-
 
     sample_fn = {
         "heun": partial(sample_heun, beta_d=diffusion.beta_d, beta_min=diffusion.beta_min),

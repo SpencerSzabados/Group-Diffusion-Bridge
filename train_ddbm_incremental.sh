@@ -23,7 +23,7 @@ mpiexec --allow-run-as-root -n $NGPU python train_ddbm_incremental.py \
     --test_interval=$TEST_INTERVAL --save_interval=$SAVE_ITER \
     --debug=False \
     ${CKPT:+ --resume_checkpoint="${CKPT}"} \
-    --dice_weight 0.5 --dice_tol 0.5
+    --dice_weight $DICE_WEIGHT --dice_tol $DICE_TOL 
 
 # CUDA_VISIBLE_DEVICES=0 python train_ddbm_incremental.py --exp=$EXP \
 #     --attention_resolutions $ATTN --class_cond False --use_scale_shift_norm True \

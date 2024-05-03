@@ -1,9 +1,8 @@
 import copy
 import functools
 import os
-
+import signal 
 from pathlib import Path
-
 import blobfile as bf
 import torch as th
 import torch.distributed as dist
@@ -55,6 +54,8 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        dice_weight=0,
+        dice_tol=0,
         total_training_steps=10000000,
         augment_pipe=None,
         **sample_kwargs,
@@ -73,6 +74,10 @@ class TrainLoop:
             if isinstance(ema_rate, float)
             else [float(x) for x in ema_rate.split(",")]
         )
+        self.weight_decay = weight_decay
+        self.lr_anneal_steps = lr_anneal_steps
+        self.dice_weight = dice_weight
+        self.dice_tol = dice_tol
         self.log_interval = log_interval
         self.workdir = workdir
         self.test_interval = test_interval
@@ -82,8 +87,6 @@ class TrainLoop:
         self.use_fp16 = use_fp16
         self.fp16_scale_growth = fp16_scale_growth
         self.schedule_sampler = schedule_sampler or UniformSampler(diffusion)
-        self.weight_decay = weight_decay
-        self.lr_anneal_steps = lr_anneal_steps
         self.total_training_steps = total_training_steps
 
         self.step = 0
@@ -91,7 +94,6 @@ class TrainLoop:
         self.global_batch = self.batch_size * dist.get_world_size()
 
         self.sync_cuda = th.cuda.is_available()
-
 
         self._load_and_sync_parameters()
         self.mp_trainer = MixedPrecisionTrainer(
@@ -141,6 +143,12 @@ class TrainLoop:
         self.sample_kwargs = sample_kwargs
 
         self.augment = augment_pipe
+
+        signal.signal(signal.SIGUSR1, self._sig_handler)
+
+    def _sig_handler(self, signum, frame):
+        logger.log(f"Recived SLURM SIGNAL {signum}, stopping up training...")
+        self.save()
     
     def _load_and_sync_parameters(self):
         resume_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
@@ -232,7 +240,7 @@ class TrainLoop:
                     cond['xT'] = self.preprocess(cond['xT']) # TODO: removed for testing
                     # cond['xT'] = cond['xT']
 
-                took_step = self.run_step(batch, cond, mask=mask)
+                took_step = self.run_step(batch, cond, mask=mask, dice_weight=self.dice_weight, dice_tol=self.dice_tol)
                 if took_step and self.step % self.log_interval == 0:
                     logs = logger.dumpkvs()
                         
@@ -271,8 +279,8 @@ class TrainLoop:
 
         return self.step, self.ema_rate
         
-    def run_step(self, batch, cond, mask=None):
-        self.forward_backward(batch, cond, mask=mask)
+    def run_step(self, batch, cond, mask=None, dice_weight=0.0, dice_tol=0.0):
+        self.forward_backward(batch, cond, mask=mask, dice_weight=dice_weight, dice_tol=dice_tol)
         took_step = self.mp_trainer.optimize(self.opt)
         if took_step:
             self.step += 1
