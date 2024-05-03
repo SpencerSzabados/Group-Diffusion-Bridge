@@ -152,11 +152,12 @@ class KarrasDenoiser:
         
         assert model_kwargs is not None
 
-        # Encode inputs 
-        with autocast(dtype=th.float16):
-            x_start_ = x_start
-            x_start = vae.encode(x_start).latent_dist.mode()
-            model_kwargs['xT'] = vae.encode(model_kwargs['xT']).latent_dist.mode()
+        with th.no_grad():
+            # Encode inputs 
+            with autocast(dtype=th.float16):
+                x_start_ = x_start
+                x_start = vae.encode(x_start).latent_dist.mode()
+                model_kwargs['xT'] = vae.encode(model_kwargs['xT']).latent_dist.mode()
         
         if noise is None:
             noise = th.randn_like(x_start) 

@@ -58,7 +58,8 @@ def create_argparser():
         fp16_scale_growth=1e-3,
         debug=False,
         num_workers=2,
-        use_augment=False
+        use_augment=False,
+        multi_gpu_sampling=False,
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()
@@ -93,11 +94,12 @@ def training_sample(diffusion, model, vae, data, num_samples, step, args):
     |   MSE     |
     +-----------+
     """
-    # Move models to seperate gpus due to memory restictions 
-    print("Generating training smaple...")
-    print("Moving models to different devices...")
-    vae.to("cuda:1")
-    model.to("cuda:0")
+    if args.multi_gpu_sampling:
+        # Move models to seperate gpus due to memory restictions 
+        print("Generating training smaple...")
+        print("Moving models to different devices...")
+        vae.to("cuda:1")
+        model.to("cuda:0")
     
     test_batch, test_cond, _, mask = next(iter(data))
     batch_size = len(test_batch)
@@ -127,17 +129,40 @@ def training_sample(diffusion, model, vae, data, num_samples, step, args):
 
     with th.no_grad():
     # Pass data into encoder
-        with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
+        if args.multi_gpu_sampling:
+            with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
+                with autocast(dtype=th.float32):
+                    emb_test_batch = vae.encode(test_batch).latent_dist.mode()
+                    emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
+        else:
             with autocast(dtype=th.float32):
-                emb_test_batch = vae.encode(test_batch).latent_dist.mode()
-                emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
+                    emb_test_batch = vae.encode(test_batch).latent_dist.mode()
+                    emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
 
         logger.log("Generating samples...")
         
         gathered = th.cat((test_xT,test_batch),0).to("cuda:0")
         # normalize values of gathered to the same scale as the model output 
 
-        with th.cuda.device('cuda:0'):
+        if args.multi_gpu_sampling:
+            with th.cuda.device('cuda:0'):
+                emb_sample, path, nfe = karras_sample(
+                    diffusion,
+                    model,
+                    emb_test_xT,
+                    emb_test_batch,
+                    steps=40,
+                    model_kwargs={'xT': emb_test_xT},
+                    clip_denoised=True,
+                    sampler='heun',
+                    sigma_min=args.sigma_min,
+                    sigma_max=args.sigma_max,
+                    guidance=1
+                )
+            with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
+                with autocast(dtype=th.float32):
+                    sample = vae.decode(emb_sample).sample
+        else:
             emb_sample, path, nfe = karras_sample(
                 diffusion,
                 model,
@@ -151,7 +176,6 @@ def training_sample(diffusion, model, vae, data, num_samples, step, args):
                 sigma_max=args.sigma_max,
                 guidance=1
             )
-        with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
             with autocast(dtype=th.float32):
                 sample = vae.decode(emb_sample).sample
     sample = sample.contiguous().detach().cpu()
@@ -182,12 +206,12 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
     samples from these in order to compute the F1 (Dice) score of the model. This is
     used for image segementation accuracy evaluation.
     """
-    # Move models to seperate gpus due to memory restictions 
-    print("Generating smaples...")
-    print("Moving models to different devices...")
-    vae.to("cuda:1")
-    model.to("cuda:0")
-
+    if args.multi_gpu_sampling:  
+        # Move models to seperate gpus due to memory restictions 
+        print("Generating smaples...")
+        print("Moving models to different devices...")
+        vae.to("cuda:1")
+        model.to("cuda:0")
 
     def _sample():
         """
@@ -218,7 +242,25 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
                     emb_test_batch = vae.encode(test_batch).latent_dist.mode()
                     emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
 
-            with th.cuda.device('cuda:0'):  # Move processing back to GPU(0)
+            if args.multi_gpu_sampling:
+                with th.cuda.device('cuda:0'):
+                    emb_sample, path, nfe = karras_sample(
+                        diffusion,
+                        model,
+                        emb_test_xT,
+                        emb_test_batch,
+                        steps=40,
+                        model_kwargs={'xT': emb_test_xT},
+                        clip_denoised=True,
+                        sampler='heun',
+                        sigma_min=args.sigma_min,
+                        sigma_max=args.sigma_max,
+                        guidance=1
+                    )
+                with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
+                    with autocast(dtype=th.float32):
+                        sample = vae.decode(emb_sample).sample
+            else:
                 emb_sample, path, nfe = karras_sample(
                     diffusion,
                     model,
@@ -232,7 +274,6 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
                     sigma_max=args.sigma_max,
                     guidance=1
                 )
-            with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
                 with autocast(dtype=th.float32):
                     sample = vae.decode(emb_sample).sample
         sample = sample.contiguous().detach().cpu()
@@ -354,6 +395,7 @@ def main(args):
     checkpoint = th.load(os.path.join(args.work_dir,"vae/model_020000.pt"), map_location=dist_util.dev())
     vae.load_state_dict(checkpoint)
 
+
     vae.eval()
     vae.half() # TODO: Added to debug gpu memory usage.
 
@@ -392,6 +434,8 @@ def main(args):
     else:
         augment = None
         
+    logger.log(args)
+
     logger.log("training...")
     trainloop = TrainLoop(
         vae=vae,
@@ -420,9 +464,12 @@ def main(args):
         **sample_defaults()
     )
 
+
+    print('trainloop initialized')
     # Train model incrementally 
     while True:
-        if th.cuda.device_count() >= 2:
+        if dist.get_world_size() >= 2 and args.multi_gpu_sampling:
+            logger.log("Training using split gpu sampling...")
             step, ema_rate = trainloop.run_loop()
             # Compute model metrics
             th.cuda.empty_cache()
@@ -433,6 +480,15 @@ def main(args):
             # Training and metric computations scripts move models off devices 
             vae.to(dist_util.dev())
             model.to(dist_util.dev())
+        elif dist.get_world_size() >= 2 and not args.multi_gpu_sampling:
+            logger.log("Training without split gpu sampling...")
+            step, ema_rate = trainloop.run_loop()
+            # Compute model metrics
+            th.cuda.empty_cache()
+            model.eval()
+            training_sample(diffusion, model, vae, test_data, 2, step, args)
+            calculate_metrics(diffusion, model, vae, test_data, step, args)
+            model.train()
         else:
             logger.log("Incremental smapling is not supported on fewer than 2 gpus. Proceeding without incremental sampling.")
             trainloop.run_loop()

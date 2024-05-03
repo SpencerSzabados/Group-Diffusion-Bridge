@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=fine_tune_sd_vae
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:yaolianggpu:1 -p YAOLIANG
+#SBATCH --gres=gpu:yaolianggpu:2 -p YAOLIANG
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16GB
 #SBATCH --signal=B:SIGUSR1@30
@@ -14,9 +14,9 @@ echo "Job stared..."
 
 source activate ddbm
 
-source ./args_autoencoder.sh $DATSET fives $NGPU 1
+source ./args_autoencoder.sh $DATSET fives $NGPU 2
 
-mpiexec --use-hwthread-cpus --oversubscribe -n $NGPU python train_autoencoder.py \
+NCCL_P2P_LEVEL=NVL mpiexec --use-hwthread-cpus --oversubscribe -n $NGPU python train_autoencoder.py \
     --workdir $WORK_DIR --data_dir $DATA_DIR --image_size $IMAGE_SIZE --global_batch_size $BATCH_SIZE \
     --lr $LR --ema_rate $EMA_RATE --weight_decay $WEIGHT_DECAY --lr_anneal_steps $LR_ANNEAL_STEPS \
     --log_interval $LOG_INTERVAL --save_interval $SAVE_INTERVAL --total_training_steps $TOTAL_TRAINING_STEPS \

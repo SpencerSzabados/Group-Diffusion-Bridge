@@ -255,7 +255,7 @@ class VAETrainLoop():
             ):
                 self.save()
                 th.cuda.empty_cache()
-    
+            print("here")
             if (self.save_interval != -1 and 
                 self.step > 0 and 
                 self.step % self.sample_interval == 0

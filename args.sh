@@ -14,8 +14,9 @@ SAMPLER=real-uniform
 NUM_RES_BLOCKS=2
 USE_16FP=True
 ATTN_TYPE=flash
+LOG_INTERVAL=500
 TEST_INTERVAL=20000
-SAVE_ITER=20000
+SAVE_INTERVAL=20000
 IN_CHANNELS=3
 OUT_CHANNELS=3
 
@@ -31,7 +32,7 @@ if [[ $DATASET_NAME == 'vae_fives_patches' ]]; then
     EMB_SIZE=64
     EMB_CHANNELS=4
     NUM_CH=128
-    NUM_RES_BLOCKS=2
+    NUM_RES_BLOCKS=3
     DICE_TOL=0.5
     DICE_WEIGHT=0.0
     EXP="h2e_rot90_${DATASET}_${IMG_SIZE}_${IN_CHANNELS}ich_${NUM_CH}ch_${NUM_RES_BLOCKS}b"
@@ -65,8 +66,7 @@ fi
 
 
 if  [[ $DATA_IMG_SIZE == 512 ]]; then
-    BS=6
-    MICRO=-1
+    BS=32
 elif  [[ $DATA_IMG_SIZE == 256 ]]; then
     BS=16
 elif  [[ $DATA_IMG_SIZE == 128 ]]; then

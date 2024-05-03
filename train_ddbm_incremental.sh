@@ -16,7 +16,7 @@ mpiexec --allow-run-as-root -n $NGPU python train_ddbm_incremental.py \
     ${COND:+ --condition_mode="${COND}"} ${MICRO:+ --microbatch="${MICRO}"} \
     --pred_mode=$PRED  --schedule_sampler $SAMPLER ${UNET:+ --unet_type="${UNET}"} \
     --use_fp16 $USE_16FP --attention_type $ATTN_TYPE --weight_decay 0.0 \
-    --weight_schedule bridge_karras\
+    --weight_schedule bridge_karras \
     ${BETA_D:+ --beta_d="${BETA_D}"} ${BETA_MIN:+ --beta_min="${BETA_MIN}"}  \
     ${CH_MULT:+ --channel_mult="${CH_MULT}"} \
     --num_workers=8 --sigma_data $SIGMA_DATA --sigma_max=$SIGMA_MAX --sigma_min=$SIGMA_MIN --cov_xy $COV_XY \
