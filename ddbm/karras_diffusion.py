@@ -154,10 +154,9 @@ class KarrasDenoiser:
 
         with th.no_grad():
             # Encode inputs 
-            with autocast(dtype=th.float16):
-                x_start_ = x_start
-                x_start = vae.encode(x_start).latent_dist.mode()
-                model_kwargs['xT'] = vae.encode(model_kwargs['xT']).latent_dist.mode()
+            x_start_ = x_start
+            x_start = vae.encode(x_start).latent_dist.mode()
+            model_kwargs['xT'] = vae.encode(model_kwargs['xT']).latent_dist.mode()
         
         if noise is None:
             noise = th.randn_like(x_start) 
@@ -198,7 +197,7 @@ class KarrasDenoiser:
         if mask[0] != -1 and mask is not None:
             x_t = x_t*mask
 
-        model_output, denoised = self.denoise(model, x_t, sigmas,  **model_kwargs)
+        model_output, denoised = self.denoise(model, x_t, sigmas, **model_kwargs)
 
         if mask[0] != -1 and mask is not None:
             model_output = model_output*mask

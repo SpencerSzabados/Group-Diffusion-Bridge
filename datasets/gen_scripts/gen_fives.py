@@ -17,6 +17,21 @@ import cv2
 from tqdm import tqdm
 
     
+def remove_water_mark(data_dir, processed_dir):
+    """
+    Preprocess data to remove white water mark in boundary of image.
+    """
+    print("Removing image water mark...")
+    # Load image dataset from data_dir 
+    # Assuming 'dataset' is a 3D array with shape (height, width, channels)
+    img_files = [f for f in os.listdir(os.path.join(data_dir,"raw_images")) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+
+    mask = Image.new("RGB", (100,150), color="black")
+    for file in tqdm(img_files):
+        img = Image.open(data_dir+"raw_images/"+file)
+        img.paste(mask, (0,0))
+        img.save(os.path.join(processed_dir+"raw_images/", f"{file}"))
+
 def convert_grey_scale(data_dir, processed_dir):
     """
     Preprocess data and convert it to grey scale images using weighted average of colour channels.
@@ -176,10 +191,10 @@ def grid_crop(data_dir, processed_dir, resolution=64):
     are stiched to their corresponding patch from the image mask.
     """
     print("Slicing images into grids...")
-    img_files = [f for f in os.listdir(os.path.join(data_dir,"images")) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+    img_files = [f for f in os.listdir(os.path.join(data_dir,"raw_images")) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
 
     num_images = len(img_files)
-    w, h = Image.open(data_dir+"images/"+img_files[0]).size
+    w, h = Image.open(data_dir+"raw_images/"+img_files[0]).size
     assert (w%resolution == 0) and (h%resolution == 0)
 
     for file in tqdm(img_files):
@@ -188,8 +203,8 @@ def grid_crop(data_dir, processed_dir, resolution=64):
         index = int(tokens[0])
         label = tokens[1]
 
-        image = Image.open(data_dir+"images/"+file)
-        mask = Image.open(data_dir+"masks/"+file)
+        image = Image.open(data_dir+"raw_images/"+file)
+        mask = Image.open(data_dir+"raw_masks/"+file)
 
         w, h = image.size
         for i in range(w//resolution):
@@ -205,26 +220,31 @@ def grid_crop(data_dir, processed_dir, resolution=64):
                 mask_cropped = mask.crop((left, top, right, bottom))
 
                 # Glue images together 
-                combined_image = Image.new("L", (2*resolution,resolution))
+                combined_image = Image.new("RGB", (2*resolution,resolution))
                 combined_image.paste(mask_cropped, (resolution,0))
                 combined_image.paste(img_cropped, (0,0))
                 
                 # Save the result to the output directory
                 file_name = str(index)+"_"+str(i)+str(j)+"_"+label
                 combined_image.save(os.path.join(processed_dir, f"{file_name}"))
+                img_cropped.save(os.path.join(processed_dir+"images", f"{file_name}"))
+                mask_cropped.save(os.path.join(processed_dir+"masks", f"{file_name}"))
     print("Finished.")
 
 
 def main():
     # data paramters
-    data_dir = "/home/sszabados/datasets/fives/test/"
-    temp_dir = "/home/sszabados/datasets/fives/temp/"
-    processed_dir = "/home/sszabados/datasets/fives512_patches/test/"
+    data_dir = "/share/yaoliang/datasets/fives_RGB512_patches/val/"
+    temp_dir = "/share/yaoliang/datasets/fives_L512_patches/test/temp/"
+    processed_dir = "/share/yaoliang/datasets/fives_RGB512_patches/val/"
 
-    convert_grey_scale(data_dir, temp_dir)
-    CLAHE(temp_dir, temp_dir, threshold=1.8, grid_size=8)
-    gamma_correction(temp_dir, processed_dir, gamma=1.2)
-    grid_crop(data_dir, processed_dir, resolution=512)
+    remove_water_mark(data_dir, processed_dir)
+    # convert_grey_scale(processed_dir, processed_dir)
+    # CLAHE(processed_dir, processed_dir, threshold=1.8, grid_size=8)
+    # gamma_correction(processed_dir, processed_dir, gamma=1.2)
+    # scale_data(processed_dir, processed_dir, resolution=64)
+    grid_crop(processed_dir, processed_dir, resolution=512)
+
 
 if __name__ == "__main__":
     main()

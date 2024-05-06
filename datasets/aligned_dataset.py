@@ -122,7 +122,7 @@ class EdgesDataset(torch.utils.data.Dataset):
             self.AB_paths = sorted(self.train_paths)
         else:
             self.test_dir = os.path.join(dataroot, 'val')  # get the image directory
-            self.AB_paths = make_dataset(self.tesst_dir) # get image paths
+            self.AB_paths = make_dataset(self.test_dir) # get image paths
             
         self.crop_size = img_size
         self.resize_size = img_size

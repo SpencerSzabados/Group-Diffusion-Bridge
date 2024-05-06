@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=ddbm_vae
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:yaolianggpu:2 -p YAOLIANG
+#SBATCH --gres=gpu:yaolianggpu:1 -p YAOLIANG
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16GB
 #SBATCH --signal=B:USR1@30
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=%x.out
 #SBATCH --error=%x.err
 
@@ -14,7 +14,7 @@ echo "Job stared..."
 
 source activate ddbm
 
-source ./args.sh $DATSET vae_fives_patches $PRED vp $NGPU 2
+source ./args.sh $DATSET vae_fives_patches $PRED vp $NGPU 1
 
 NCCL_P2P_LEVEL=NVL mpiexec --use-hwthread-cpus --oversubscribe -n $NGPU python train_ddbm_incremental.py \
     --work_dir=$WORK_DIR --exp=$EXP --data_dir=$DATA_DIR --dataset=$DATASET \

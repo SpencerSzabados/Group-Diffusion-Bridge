@@ -113,6 +113,10 @@ def training_sample(diffusion, model, vae, data, num_samples, step, args):
     if mask[0] != -1 and mask is not None:
         mask = mask[0:num_samples]
 
+    test_batch = test_batch.to(dist_util.dev())
+    test_cond = test_cond.to(dist_util.dev())
+    mask = mask.to(dist_util.dev())
+
     test_batch = preprocess(test_batch)
 
     # Mask input if mask exists
@@ -128,7 +132,7 @@ def training_sample(diffusion, model, vae, data, num_samples, step, args):
         test_cond['xT'] = preprocess(test_cond['xT'])
 
     with th.no_grad():
-    # Pass data into encoder
+        # Pass data into encoder
         if args.multi_gpu_sampling:
             with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
                 with autocast(dtype=th.float32):
@@ -136,12 +140,12 @@ def training_sample(diffusion, model, vae, data, num_samples, step, args):
                     emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
         else:
             with autocast(dtype=th.float32):
-                    emb_test_batch = vae.encode(test_batch).latent_dist.mode()
-                    emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
+                emb_test_batch = vae.encode(test_batch).latent_dist.mode()
+                emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
 
         logger.log("Generating samples...")
         
-        gathered = th.cat((test_xT,test_batch),0).to("cuda:0")
+        gathered = th.cat((test_xT,test_batch),0).contiguous().detach().cpu()
         # normalize values of gathered to the same scale as the model output 
 
         if args.multi_gpu_sampling:
@@ -178,10 +182,12 @@ def training_sample(diffusion, model, vae, data, num_samples, step, args):
             )
             with autocast(dtype=th.float32):
                 sample = vae.decode(emb_sample).sample
-    sample = sample.contiguous().detach().cpu()
 
     if mask[0] != -1 and mask is not None:
         sample = sample*mask
+
+    sample = sample.contiguous().detach().cpu()
+    test_batch = test_batch.contiguous().detach().cpu()
 
     # if th.min(test_batch) <= 0 or th.max(test_batch) >= 1:
     #     test_batch = (test_batch+1.)/2.
@@ -219,6 +225,10 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
         """
         test_batch, test_cond, _, mask = next(iter(data))   
 
+        test_batch = test_batch.to(dist_util.dev())
+        test_cond = test_cond.to(dist_util.dev())
+        mask = mask.to(dist_util.dev())
+
         test_batch = preprocess(test_batch)
 
         # Mask input if mask exists
@@ -237,10 +247,16 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
 
         with th.no_grad():
             # Pass data into encoder
-            with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
+            if args.multi_gpu_sampling:
+                with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
+                    with autocast(dtype=th.float32):
+                        emb_test_batch = vae.encode(test_batch).latent_dist.mode()
+                        emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
+            else:
                 with autocast(dtype=th.float32):
                     emb_test_batch = vae.encode(test_batch).latent_dist.mode()
                     emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
+
 
             if args.multi_gpu_sampling:
                 with th.cuda.device('cuda:0'):
@@ -276,10 +292,13 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
                 )
                 with autocast(dtype=th.float32):
                     sample = vae.decode(emb_sample).sample
-        sample = sample.contiguous().detach().cpu()
 
         if mask[0] != -1 and mask is not None:
             sample = sample*mask
+
+        sample = sample.contiguous().detach().cpu()
+        test_xT = test_xT.contiguous().detach().cpu()
+        mask = mask.contiguous().detach().cpu()
 
         return sample, test_xT, mask
 
@@ -392,12 +411,10 @@ def main(args):
                     logger.log('Resuming from checkpoint: ', max_ckpt)
 
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae", use_safetensors=False).to(dist_util.dev())
-    checkpoint = th.load(os.path.join(args.work_dir,"vae/model_020000.pt"), map_location=dist_util.dev())
+    checkpoint = th.load(os.path.join(args.work_dir,"vae/model_040000.pt"), map_location=dist_util.dev())
     vae.load_state_dict(checkpoint)
-
-
     vae.eval()
-    vae.half() # TODO: Added to debug gpu memory usage.
+    # vae.half() # TODO: Added to debug gpu memory usage.
 
     model, diffusion = create_model_and_diffusion(
         **args_to_dict(args, model_and_diffusion_defaults().keys())
@@ -470,25 +487,27 @@ def main(args):
     while True:
         if dist.get_world_size() >= 2 and args.multi_gpu_sampling:
             logger.log("Training using split gpu sampling...")
+            model.train()
             step, ema_rate = trainloop.run_loop()
             # Compute model metrics
             th.cuda.empty_cache()
             model.eval()
-            training_sample(diffusion, model, vae, test_data, 2, step, args)
+            training_sample(diffusion, model, vae, test_data, 5, step, args)
             calculate_metrics(diffusion, model, vae, test_data, step, args)
-            model.train()
+            trainloop.step += 1
             # Training and metric computations scripts move models off devices 
             vae.to(dist_util.dev())
             model.to(dist_util.dev())
-        elif dist.get_world_size() >= 2 and not args.multi_gpu_sampling:
+        elif dist.get_world_size() == 1 and not args.multi_gpu_sampling:
             logger.log("Training without split gpu sampling...")
+            model.train()
             step, ema_rate = trainloop.run_loop()
             # Compute model metrics
             th.cuda.empty_cache()
             model.eval()
             training_sample(diffusion, model, vae, test_data, 2, step, args)
             calculate_metrics(diffusion, model, vae, test_data, step, args)
-            model.train()
+            trainloop.step += 1
         else:
             logger.log("Incremental smapling is not supported on fewer than 2 gpus. Proceeding without incremental sampling.")
             trainloop.run_loop()

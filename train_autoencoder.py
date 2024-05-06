@@ -184,12 +184,15 @@ class VAETrainLoop():
         return x
 
     def forward(self, x, sample=True):
+        print(x.shape)
         posterior = self.encode(x).latent_dist
         if sample:
             z = posterior.sample()
         else:
             z = posterior.mode()
+        print(z.shape)
         x_hat = self.decode(z).sample
+        print(x_hat.shape)
         return x_hat
 
     def sample(self):
@@ -232,7 +235,7 @@ class VAETrainLoop():
         self.opt.zero_grad()
 
         batch = batch.to(dist_util.dev())
-        
+
         loss, loss_terms = _compute_losses(batch)
         loss.backward()
         self.opt.step()
@@ -255,7 +258,7 @@ class VAETrainLoop():
             ):
                 self.save()
                 th.cuda.empty_cache()
-            print("here")
+
             if (self.save_interval != -1 and 
                 self.step > 0 and 
                 self.step % self.sample_interval == 0

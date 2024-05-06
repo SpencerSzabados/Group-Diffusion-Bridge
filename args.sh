@@ -23,7 +23,7 @@ OUT_CHANNELS=3
 
 # Arguments
 if [[ $DATASET_NAME == 'vae_fives_patches' ]]; then
-    DATA_DIR=/u6/sszabado/datasets/fives512_patches/
+    DATA_DIR=/share/yaoliang/datasets/fives_L512_patches/
     WORK_DIR=/u6/sszabado/checkpoints/ddbm/
     DATASET=fives_patches
     DATA_IMG_SIZE=512
@@ -66,7 +66,7 @@ fi
 
 
 if  [[ $DATA_IMG_SIZE == 512 ]]; then
-    BS=32
+    BS=16
 elif  [[ $DATA_IMG_SIZE == 256 ]]; then
     BS=16
 elif  [[ $DATA_IMG_SIZE == 128 ]]; then

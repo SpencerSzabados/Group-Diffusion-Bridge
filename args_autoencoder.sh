@@ -26,7 +26,7 @@ if [[ $DATASET == "NAME" ]]; then
     SAVE_INTERVAL=100000
 elif [[ $DATASET == "fives" ]]; then
     WORK_DIR=/u6/sszabado/checkpoints/ddbm/vae/
-    DATA_DIR=/u6/sszabado/datasets/fives512_patches/train/images/,/u6/sszabado/datasets/fives512_patches/train/masks/
+    DATA_DIR=/share/yaoliang/datasets/fives_L512_patches/train/images/,/share/yaoliang/datasets/fives_L512_patches/train/masks/
     IMAGE_SIZE=512
     USE_16FP=False
 else
