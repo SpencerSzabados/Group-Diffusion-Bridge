@@ -5,7 +5,7 @@ import numpy as np
 import torchvision.transforms as transforms
 from .image_folder import make_dataset
 from PIL import Image
-
+import random
 import torchvision
 import blobfile as bf
 
@@ -43,7 +43,7 @@ def get_rotation(params, rotate=True):
     return transforms.Compose(transform_list)
 
 
-def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC, flip=True, crop=True, totensor=True):
+def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC, flip=True, crop=True, totensor=True, rotate=True):
     transform_list = []
     transform_list.append(transforms.Lambda(lambda img: __scale(img, crop_size, method)))
 
@@ -51,6 +51,8 @@ def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC, flip=T
         transform_list.append(transforms.Lambda(lambda img: __flip(img, params['flip'])))
     if totensor:
         transform_list.append(transforms.ToTensor())
+    if rotate:
+        transform_list.append(transforms.Lambda(lambda img: torch.rot90(img, random.randint(0,3), dims=[-1,-2])))
     return transforms.Compose(transform_list)
 
 
@@ -162,10 +164,12 @@ class EdgesDataset(torch.utils.data.Dataset):
         # apply the same transform to both A and B
         params =  get_params(A.size, self.resize_size, self.crop_size, self.angle)
         rotate_image = get_rotation(params, rotate=self.rotate)
-        transform_image = get_transform(params, self.resize_size, self.crop_size, crop =self.random_crop, flip=self.random_flip)
+        transform_image = get_transform(params, self.resize_size, self.crop_size, crop=self.random_crop, flip=self.random_flip)
 
-        A = transform_image(rotate_image(A))
-        B = transform_image(rotate_image(B))
+        # A = transform_image(rotate_image(A))
+        # B = transform_image(rotate_image(B))
+        A = transform_image(A)
+        B = transform_image(B)
 
         if not self.train:
             return  B, A, index, AB_path, self.mask

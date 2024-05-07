@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16GB
 #SBATCH --signal=B:SIGUSR1@30
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=%x.out
 #SBATCH --error=%x.err
 
