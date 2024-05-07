@@ -6,6 +6,7 @@ import numpy as np
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
+from torcheval.metrics.functional import multiclass_f1_score as F1
 from torch.cuda.amp import autocast
 import torchvision
 from piq import LPIPS
@@ -226,18 +227,17 @@ class KarrasDenoiser:
         # Compute DICE regularization loss term 
         dice_loss = 0
         if dice_weight > 0:
-            norm_denoised = denoised.clamp(0,1)
-            norm_x_start = x_start.clamp(0,1)
-            # dice_loss = 1. - 2.*mean_flat(norm_denoised*norm_x_start+1e-8)/(mean_flat(norm_denoised)+mean_flat(norm_x_start)+1e-8)
-            dice_loss = 1. - 2.*mean_flat(norm_denoised*x_start)/(mean_flat(denoised)+mean_flat(x_start)+1e-8)
+            norm_denoised = ((denoised+1)/2).clamp(0,1)
+            norm_x_start = ((x_start+1)/2).clamp(0,1)
+            dice_loss = 1. - F1(th.flatten(norm_denoised), th.flatten(norm_x_start), num_classes=2)
 
         weights = self.get_weightings(sigmas)
         weights = append_dims((weights), dims)
         terms["xs_mse"] = mean_flat((denoised - x_start) ** 2)
         terms["mse"] = mean_flat(weights * (denoised - x_start) ** 2)
         if dice_weight > 0:
-            terms["xs_dice"] = mean_flat(dice_loss)
-            terms["dice"] = mean_flat(weights*dice_loss)
+            terms["xs_dice"] = dice_loss
+            terms["dice"] = mean_flat(weights)*dice_loss
         else:
             terms["xs_dice"] = 0
             terms["dice"] = 0

@@ -8,6 +8,7 @@ from glob import glob
 import argparse
 import numpy as np
 import torch as th
+from torcheval.metrics.functional import multiclass_f1_score as F1
 import torch.distributed as dist
 import torchvision
 from torch.cuda.amp import autocast
@@ -307,16 +308,21 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
         Function computes the f1 dice loss between a generated image (mask) and the reference image
         """
         # Ensure imputs are normalized to [0,1]
-        if th.min(gen_img) <= 0. or th.max(gen_img) >= 1.:
-            print(f"gen_img range: min:{th.min(gen_img)}, max:{th.max(gen_img)}")
-            # gen_img = (gen_img+1.)/2.
-            gen_img = gen_img.clamp(0,1)
-            assert th.min(gen_img) >= 0. and th.max(gen_img) <= 1.
-        if th.min(ref_img) <= 0. or th.max(ref_img) >= 1.:
-            print(f"ref_img range: min:{th.min(ref_img)}, max:{th.max(ref_img)}")
-            # ref_img = (ref_img+1.)/2.
-            ref_img = ref_img.clamp(0,1)
-            assert th.min(ref_img) >= 0. and th.max(ref_img) <= 1.
+        # if th.min(gen_img) <= 0. or th.max(gen_img) >= 1.:
+        #     print(f"gen_img range: min:{th.min(gen_img)}, max:{th.max(gen_img)}")
+        #     gen_img = (gen_img+1.)/2.
+        #     gen_img = gen_img.clamp(0,1)
+        #     assert th.min(gen_img) >= 0. and th.max(gen_img) <= 1.
+        # if th.min(ref_img) <= 0. or th.max(ref_img) >= 1.:
+        #     print(f"ref_img range: min:{th.min(ref_img)}, max:{th.max(ref_img)}")
+        #     ref_img = (ref_img+1.)/2.
+        #     ref_img = ref_img.clamp(0,1)
+        #     assert th.min(ref_img) >= 0. and th.max(ref_img) <= 1.
+
+        gen_img = (gen_img+1.)/2.
+        gen_img = gen_img.clamp(0,1)
+        ref_img = (ref_img+1.)/2.
+        ref_img = ref_img.clamp(0,1)
 
         # Compute MSE
         mse_loss = mean_flat((gen_img-ref_img)**2)
@@ -329,10 +335,12 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
         elif gen_img.shape[1] > 3:
             raise ValueError(f"Number of output channels must be either {1} or {3}.")
         
-        dice = 2.*mean_flat(gen_img*ref_img+1e-8)/(mean_flat(gen_img)+mean_flat(ref_img)+1e-8)
+        gen_img = th.flatten(gen_img)
+        ref_img = th.faltten(ref_img)
+        dice = F1(gen_img, ref_img, num_classes=2)
         gen_img_bin = (gen_img >= 0.5).float()
         ref_img_bin = (ref_img >= 0.5).float()
-        dice_tol = 2.*mean_flat(gen_img_bin*ref_img_bin+1e-8)/(mean_flat(gen_img_bin)+mean_flat(ref_img_bin)+1e-8)
+        dice_tol = F1(gen_img_bin, ref_img_bin, num_classes=2)
         
         # Compute accuracy 
         I = th.ones_like(ref_img)
