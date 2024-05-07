@@ -31,7 +31,7 @@ if [[ $DATASET_NAME == 'vae_fives_patches' ]]; then
     OUT_CHANNELS=1
     EMB_SIZE=64
     EMB_CHANNELS=4
-    NUM_CH=128
+    NUM_CH=192
     NUM_RES_BLOCKS=3
     DICE_TOL=0.5
     DICE_WEIGHT=0.0
@@ -66,7 +66,7 @@ fi
 
 
 if  [[ $DATA_IMG_SIZE == 512 ]]; then
-    BS=16
+    BS=2
 elif  [[ $DATA_IMG_SIZE == 256 ]]; then
     BS=16
 elif  [[ $DATA_IMG_SIZE == 128 ]]; then

@@ -55,6 +55,8 @@ class VAETrainLoop():
         weight_l2=0.5,
         weight_lpips=0.002,
         fp16=False,
+        eqv='Z2',
+        decoder_only=False,
         log_interval=1000,
         sample_interval=1000,
         save_interval=10_000,
@@ -92,6 +94,9 @@ class VAETrainLoop():
             self.model_params, lr=self.lr, weight_decay=self.weight_decay
         )
         self.fp16 = fp16
+        self.eqv = eqv
+        self.decoder_only = decoder_only
+
         self.loss_fn_l2 = th.nn.MSELoss()
         self.loss_fn_lpips = lpips.LPIPS().to(dist_util.dev())
 
@@ -184,15 +189,27 @@ class VAETrainLoop():
         return x
 
     def forward(self, x, sample=True):
-        print(x.shape)
-        posterior = self.encode(x).latent_dist
+        
         if sample:
-            z = posterior.sample()
+            if self.eqv == 'Z2':
+                z = self.encode(x).latent_dist.sample()
+            elif self.eqv == 'C4':
+                posterior = self.encode(x).latent_dist.sample()
+                for rot in range(3):
+                    x = th.rot90(x)
+                    posterior += self.encode(x).latent_dist.sample()
+                z = posterior/4.0
         else:
-            z = posterior.mode()
-        print(z.shape)
+            if self.eqv == 'Z2':
+                z = self.encode(x).latent_dist.mode()
+            elif self.eqv == 'C4':
+                posterior = self.encode(x).latent_dist.mode()
+                for rot in range(3):
+                    x = th.rot90(x)
+                    posterior += self.encode(x).latent_dist.mode()
+                z = posterior/4.0
         x_hat = self.decode(z).sample
-        print(x_hat.shape)
+
         return x_hat
 
     def sample(self):

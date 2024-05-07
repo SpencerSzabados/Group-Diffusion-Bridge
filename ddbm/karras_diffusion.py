@@ -203,17 +203,17 @@ class KarrasDenoiser:
             model_output = model_output*mask
             denoised = denoised*mask
 
-        # # Decode model outputs
-        # # TODO: This code is commented out to perform gradient updates of diffusion model
-          #       within the latent space only.
-        # with autocast(dtype=th.float16):
-        #     model_output = vae.decode(model_output).sample
-        #     denoised = vae.decode(denoised).sample
-        #     x_start = x_start_
-        # # Average all channels for computing loss 
-        # model_output = model_output.mean(dim=1, keepdim=True)
-        # denoised = denoised.mean(dim=1, keepdim=True)
-        # x_start = x_start.mean(dim=1, keepdim=True)
+        # Decode model outputs
+        # TODO: This code is commented out to perform gradient updates of diffusion model
+        #       within the latent space only.
+        with autocast(dtype=th.float16):
+            model_output = vae.decode(model_output).sample
+            denoised = vae.decode(denoised).sample
+            x_start = x_start_
+        # Average all channels for computing loss 
+        model_output = model_output.mean(dim=1, keepdim=True)
+        denoised = denoised.mean(dim=1, keepdim=True)
+        x_start = x_start.mean(dim=1, keepdim=True)
 
         # Compute DICE regularization loss term 
         dice_loss = 0
