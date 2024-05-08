@@ -156,14 +156,6 @@ class KarrasDenoiser:
         with th.no_grad():
             # Encode inputs 
             x_start_ = x_start
-            # print(x_start)
-            # print("\n===========[ xT ]===========\n")
-            # print(model_kwargs['xT'])
-            # grid_img = torchvision.utils.make_grid(x_start, nrow=2, normalize=True, scale_each=True)
-            # torchvision.utils.save_image(grid_img, f'tmp_imgs/start_debug.pdf')
-            # grid_img = torchvision.utils.make_grid(model_kwargs['xT'], nrow=2, normalize=True, scale_each=True)
-            # torchvision.utils.save_image(grid_img, f'tmp_imgs/xT_debug.pdf')
-            # exit()
             x_start = vae.encode(x_start).latent_dist.mode()
             model_kwargs['xT'] = vae.encode(model_kwargs['xT']).latent_dist.mode()
         
@@ -175,8 +167,8 @@ class KarrasDenoiser:
 
         if mask[0] != -1 and mask is not None:
             # noise = noise*mask
-            model_kwargs['xT'] =  model_kwargs['xT']*mask
             x_start = x_start*mask
+            model_kwargs['xT'] =  model_kwargs['xT']*mask
 
         xT = model_kwargs['xT']
 

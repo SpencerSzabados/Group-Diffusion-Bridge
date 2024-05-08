@@ -17,6 +17,8 @@ SAMPLE_INTERVAL=20000
 SAVE_INTERVAL=20000
 TOTAL_TRAINING_STEPS=200000
 AUG=0
+EQV=Z2
+DECODER_ONLY=False
 
 
 # Arguments
@@ -29,6 +31,13 @@ elif [[ $DATASET == "fives" ]]; then
     DATA_DIR=/share/yaoliang/datasets/fives_L512_patches/train/images/,/share/yaoliang/datasets/fives_L512_patches/train/masks/
     IMAGE_SIZE=512
     USE_16FP=False
+elif [[ $DATASET == "fives_L512_patches_eqv" ]]; then
+    WORK_DIR=/u6/sszabado/checkpoints/ddbm/vae_eqv/
+    DATA_DIR=/share/yaoliang/datasets/fives_L512_patches/train/images/,/share/yaoliang/datasets/fives_L512_patches/train/masks/
+    IMAGE_SIZE=512
+    USE_16FP=False
+    EQV=C4
+    DECODER_ONLY=True
 else
     echo "Not supported"
     exit 1    

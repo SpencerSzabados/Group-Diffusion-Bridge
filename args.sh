@@ -22,7 +22,21 @@ OUT_CHANNELS=3
 
 
 # Arguments
-if [[ $DATASET_NAME == 'vae_fives_patches' ]]; then
+if [[ $DATASET_NAME == 'fives' ]]; then
+    DATA_DIR=/share/yaoliang/datasets/fives_L2048/
+    WORK_DIR=/u6/sszabado/checkpoints/ddbm/
+    DATASET=fives
+    DATA_IMG_SIZE=2048
+    DATA_IMG_CHANNELS=3
+    OUT_CHANNELS=1
+    EMB_SIZE=64
+    EMB_CHANNELS=4
+    NUM_CH=192
+    NUM_RES_BLOCKS=3
+    DICE_TOL=0.5
+    DICE_WEIGHT=0.0
+    EXP="h2e_rot90_${DATASET}_${IMG_SIZE}_${IN_CHANNELS}ich_${NUM_CH}ch_${NUM_RES_BLOCKS}b"
+elif [[ $DATASET_NAME == 'vae_fives_patches' ]]; then
     DATA_DIR=/share/yaoliang/datasets/fives_L512_patches_correct/
     WORK_DIR=/u6/sszabado/checkpoints/ddbm/
     DATASET=fives_patches
@@ -65,7 +79,9 @@ else
 fi
 
 
-if  [[ $DATA_IMG_SIZE == 512 ]]; then
+if  [[ $DATA_IMG_SIZE == 2048 ]]; then
+    BS=1
+elif  [[ $DATA_IMG_SIZE == 512 ]]; then
     BS=16
 elif  [[ $DATA_IMG_SIZE == 256 ]]; then
     BS=16

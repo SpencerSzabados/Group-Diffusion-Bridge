@@ -335,12 +335,25 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
         elif gen_img.shape[1] > 3:
             raise ValueError(f"Number of output channels must be either {1} or {3}.")
         
+        _gen_img = gen_img
+        _ref_img = ref_img
         gen_img = th.flatten(gen_img)
-        ref_img = th.faltten(ref_img)
+        ref_img = th.flatten(ref_img)
         dice = F1(gen_img, ref_img, num_classes=2)
         gen_img_bin = (gen_img >= 0.5).float()
         ref_img_bin = (ref_img >= 0.5).float()
+        _gen_img_bin = (_gen_img >= 0.5).float()
+        _ref_img_bin = (_ref_img >= 0.5).float() 
         dice_tol = F1(gen_img_bin, ref_img_bin, num_classes=2)
+
+        grid_img = torchvision.utils.make_grid(gen_img, nrow=2, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, f'tmp_imgs/gen_img_debug.pdf')
+        grid_img = torchvision.utils.make_grid(ref_img, nrow=2, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, f'tmp_imgs/ref_img_debug.pdf')
+        grid_img = torchvision.utils.make_grid(gen_img_bin, nrow=2, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, f'tmp_imgs/gen_img_bin_debug.pdf')
+        grid_img = torchvision.utils.make_grid(ref_img_bin, nrow=2, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, f'tmp_imgs/ref_img_bin_debug.pdf')
         
         # Compute accuracy 
         I = th.ones_like(ref_img)

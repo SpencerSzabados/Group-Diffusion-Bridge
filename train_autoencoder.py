@@ -110,11 +110,9 @@ class VAETrainLoop():
             self.model.load_state_dict(
                 th.load(resume_checkpoint, map_location=dist_util.dev()),
             )
-
             dist.barrier()
 
         signal.signal(signal.SIGUSR1, self._sig_handler)
-
 
     def _sig_handler(self, signum, frame):
         logger.log(f"Recived SLURM SIGNAL {signum}, stopping up training...")
@@ -174,12 +172,6 @@ class VAETrainLoop():
         logger.logkv("loss_lpips", loss_terms["loss_lpips"])
         logger.logkv("loss", loss_terms["loss"])
 
-    def toggle_training(self):
-        if self.mode.training:
-            self.mode.eval()
-        else:
-            self.model.train()
-
     def encode(self, x):
         z = self.model.encode(x)
         return z
@@ -189,26 +181,33 @@ class VAETrainLoop():
         return x
 
     def forward(self, x, sample=True):
+        with th.no_grad_enabled(not self.decoder_only):
+            if sample:
+                if self.eqv == 'Z2':
+                    z = self.encode(x).latent_dist.sample()
+                elif self.eqv == 'C4':
+                    posterior = self.encode(x).latent_dist.sample()
+                    for rot in range(3):
+                        x = th.rot90(x)
+                        posterior += self.encode(x).latent_dist.sample()
+                    z = posterior/4.0
+            else:
+                if self.eqv == 'Z2':
+                    z = self.encode(x).latent_dist.mode()
+                elif self.eqv == 'C4':
+                    posterior = self.encode(x).latent_dist.mode()
+                    for rot in range(3):
+                        x = th.rot90(x)
+                        posterior += self.encode(x).latent_dist.mode()
+                    z = posterior/4.0
         
-        if sample:
-            if self.eqv == 'Z2':
-                z = self.encode(x).latent_dist.sample()
-            elif self.eqv == 'C4':
-                posterior = self.encode(x).latent_dist.sample()
-                for rot in range(3):
-                    x = th.rot90(x)
-                    posterior += self.encode(x).latent_dist.sample()
-                z = posterior/4.0
-        else:
-            if self.eqv == 'Z2':
-                z = self.encode(x).latent_dist.mode()
-            elif self.eqv == 'C4':
-                posterior = self.encode(x).latent_dist.mode()
-                for rot in range(3):
-                    x = th.rot90(x)
-                    posterior += self.encode(x).latent_dist.mode()
-                z = posterior/4.0
-        x_hat = self.decode(z).sample
+        if self.eqv == 'Z2':
+            x_hat = self.decode(z).sample
+        elif self.eqv == 'C4':
+            x_ = self.decode(z).sample
+            for rot in range(3):
+                x_ += th.rot90(x_)
+            x_hat = x_/4.0
 
         return x_hat
 
@@ -226,10 +225,14 @@ class VAETrainLoop():
             
         torchvision.utils.save_image((sample_grid+1.)/2., bf.join(sample_dir, f"{self.step}.png"), nrow=batch.shape[0])       
 
-        self.model.train()
+        if self.decoder_only:
+            self.model.encoder.eval()
+            self.model.decoder.train()
+        else: 
+            self.model.train()
 
     def train_step(self, batch):
-        assert self.model.training 
+        assert self.model.encoder.training or self.model.decoder.training
 
         def _compute_losses(x):
             x_hat = self.forward(x)
@@ -264,7 +267,12 @@ class VAETrainLoop():
         self._log_step(loss_terms)
 
     def run_loop(self):
-        self.model.train()
+        if self.decoder_only:
+            self.model.encoder.eval()
+            self.model.decoder.train()
+        else: 
+            self.model.train()
+
         while self.step < self.total_training_steps \
               or self.step < self.lr_anneal_steps:
             
@@ -331,6 +339,8 @@ def create_argparser():
         weight_l2=0.5,
         weight_lpips=0.002,
         fp16=False,
+        eqv='Z2',
+        decoder_only=False,
         log_interval=50,
         sample_interval=1000,
         save_interval=10_000,
@@ -407,6 +417,8 @@ def main(args):
             weight_l2=args.weight_l2,
             weight_lpips=args.weight_lpips,
             fp16=args.fp16,
+            eqv=args.eqv,
+            decoder_only=args.decoder_only,
             lr_anneal_steps=args.lr_anneal_steps,
             log_interval=args.log_interval,
             sample_interval=args.sample_interval,
