@@ -598,9 +598,10 @@ def calculate_metrics(diffusion, model, vae, data, args, num_samples=1000):
 
         sample = sample.contiguous().detach().cpu()
         test_xT = test_xT.contiguous().detach().cpu()
+        test_batch = test_batch.contiguous().detach().cpu()
         mask = mask.contiguous().detach().cpu()
 
-        return sample, test_xT, mask
+        return sample, test_batch, mask
 
     def _compute_scores(gen_img, ref_img):
         """
