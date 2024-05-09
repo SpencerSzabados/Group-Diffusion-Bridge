@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image
 import torch as th
 from torcheval.metrics.functional import multiclass_f1_score as F1
-import torchh.distributed as dist
+import torch.distributed as dist
 from torch.cuda.amp import autocast
 
 import torchvision
@@ -363,28 +363,28 @@ class GridEdgesDataset(th.utils.data.Dataset):
         params =  get_params(A.size, self.img_size, self.patch_size, self.angle)
         transform_image = get_transform(params, flip=self.random_flip)
 
-        A_batch = []
-        B_batch = []
+        # Initialize empty tensors for batches
+        B_batch = th.empty((0, 3, self.patch_size, self.patch_size), dtype=th.float32)
+        A_batch = th.empty((0, 3, self.patch_size, self.patch_size), dtype=th.float32)
+
         # Split images into 4x4 grid of 512x512px and return batch
-        for i in range(w2// self.patch_size):
+        for i in range(w2 // self.patch_size):
             # Calculate cropping parameters to randomly crop image
-            for j in range(h// self.patch_size):
-                left = i* self.patch_size
-                top = j* self.patch_size
-                right = left+ self.patch_size
-                bottom = top+ self.patch_size
+            for j in range(h // self.patch_size):
+                left = i * self.patch_size
+                top = j * self.patch_size
+                right = left + self.patch_size
+                bottom = top + self.patch_size
 
                 # Perform crop
                 B_cropped = B.crop((left, top, right, bottom))
                 A_cropped = A.crop((left, top, right, bottom))
 
-                B_batch.append(transform_image(B_cropped))
-                A_batch.append(transform_image(A_cropped))
+                # Transform and concatenate to batches
+                B_batch = th.cat((B_batch, transform_image(B_cropped).unsqueeze(0)), dim=0)
+                A_batch = th.cat((A_batch, transform_image(A_cropped).unsqueeze(0)), dim=0)
 
-        if not self.train:
-            return  B_batch, A_batch, index, AB_path, self.mask
-        else:
-            return B_batch, A_batch, index, self.mask
+        return B_batch, A_batch, index, self.mask
 
     def __len__(self):
         """Return the total number of images in the dataset."""
@@ -430,7 +430,7 @@ def preprocess(x):
     return x
 
 
-def training_sample(diffusion, model, vae, data, num_samples, step, args):
+def training_sample(diffusion, model, vae, data, num_samples, args):
     """
     Generates a small selection of samples after pausing training of ddbm model. 
     Intended to be used for visual confirmation of training progress.
@@ -449,7 +449,12 @@ def training_sample(diffusion, model, vae, data, num_samples, step, args):
     +-----------+
     """
     
-    test_batch[0], test_cond[0], _, mask[0] = next(iter(data))
+    test_batch, test_cond, _, mask = next(iter(data))
+    logger.log(test_batch.shape)
+    test_batch = test_batch[0]
+    test_cond = test_cond[0]
+    logger.log(test_batch.shape)
+
     batch_size = len(test_batch)
 
     if num_samples > batch_size:
@@ -480,16 +485,9 @@ def training_sample(diffusion, model, vae, data, num_samples, step, args):
         test_cond['xT'] = preprocess(test_cond['xT'])
 
     with th.no_grad():
-        # Pass data into encoder
-        if args.multi_gpu_sampling:
-            with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
-                with autocast(dtype=th.float32):
-                    emb_test_batch = vae.encode(test_batch).latent_dist.mode()
-                    emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
-        else:
-            with autocast(dtype=th.float32):
-                emb_test_batch = vae.encode(test_batch).latent_dist.mode()
-                emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
+        with autocast(dtype=th.float32):
+            emb_test_batch = vae.encode(test_batch).latent_dist.mode()
+            emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
 
         logger.log("Generating samples...")
         
@@ -525,10 +523,10 @@ def training_sample(diffusion, model, vae, data, num_samples, step, args):
     # Save the generated sample images
     logger.log("Sampled tensor shape: "+str(sample.shape))
     grid_img = torchvision.utils.make_grid(gathered, nrow=num_samples, normalize=True, scale_each=True)
-    torchvision.utils.save_image(grid_img, f'tmp_imgs/{step}.pdf')
+    torchvision.utils.save_image(grid_img, f'tmp_imgs/eval_ddbm_sample.pdf')
 
 
-def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000):
+def calculate_metrics(diffusion, model, vae, data, args, num_samples=1000):
     """
     Draws a random sample of conditional images from the test dataset and generates
     samples from these in order to compute the F1 (Dice) score of the model. This is
@@ -545,11 +543,18 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
         """
         Generate a large set of sample images from model for use in computing metrics.
         """
-        test_batch[0], test_cond[0], _, mask[0] = next(iter(data))   
+        test_batch, test_cond, _, mask = next(iter(data))
+        test_batch = test_batch[0]
+        test_cond = test_cond[0] 
 
         test_batch = test_batch.to(dist_util.dev())
         test_cond = test_cond.to(dist_util.dev())
         mask = mask.to(dist_util.dev())
+
+        # grid_img = torchvision.utils.make_grid(test_batch, nrow=1, normalize=True, scale_each=True)
+        # torchvision.utils.save_image(grid_img, f'tmp_imgs/test_batch_debug.pdf')
+        # grid_img = torchvision.utils.make_grid(test_cond, nrow=1, normalize=True, scale_each=True)
+        # torchvision.utils.save_image(grid_img, f'tmp_imgs/test_cond_debug.pdf')
 
         test_batch = preprocess(test_batch)
 
@@ -609,13 +614,20 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
 
         # Reassemble batch of patches into image and evaluate metrics on entire image
         patch_size = 512
-        complete_gen_img = th.zeros((3, 2048, 2048), dtype=th.float32)
-        complete_ref_img = th.zeros((3, 2048, 2048), dtype=th.float32)
-        for i in range(len(gen_img)):
+        complete_gen_img = th.zeros((1, 3, 2048, 2048), dtype=th.float32)
+        complete_ref_img = th.zeros((1, 3, 2048, 2048), dtype=th.float32)
+        for i in range(16):
             y_offset = patch_size*(i//4)
             x_offset = patch_size*(i%4)
-            complete_gen_img[:, y_offset:y_offset + patch_size, x_offset:x_offset + patch_size] = gen_img[i]
-            complete_ref_img[:, y_offset:y_offset + patch_size, x_offset:x_offset + patch_size] = ref_img[i]
+            complete_gen_img[0, :, x_offset:(x_offset + patch_size), y_offset:(y_offset + patch_size)] = gen_img[i]
+            complete_ref_img[0, :, x_offset:(x_offset + patch_size), y_offset:(y_offset + patch_size)] = ref_img[i]
+
+        # Average channels together 
+        complete_gen_img = complete_gen_img.mean(dim=1, keepdim=True)
+        complete_ref_img = complete_ref_img.mean(dim=1, keepdim=True)
+
+        print(complete_gen_img)
+        logger.log(complete_gen_img.shape)
 
         # Compute MSE
         mse = mean_flat((complete_gen_img-complete_ref_img)**2)
@@ -641,14 +653,15 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
         _complete_ref_img_bin = (_complete_ref_img >= 0.5).float() 
         dice_tol = F1(complete_gen_img_bin, complete_ref_img_bin, num_classes=2)
 
-        grid_img = torchvision.utils.make_grid(complete_gen_img, nrow=2, normalize=True, scale_each=True)
+        grid_img = torchvision.utils.make_grid(_complete_gen_img, nrow=1, normalize=True, scale_each=True)
         torchvision.utils.save_image(grid_img, f'tmp_imgs/gen_img_debug.pdf')
-        grid_img = torchvision.utils.make_grid(complete_ref_img, nrow=2, normalize=True, scale_each=True)
+        grid_img = torchvision.utils.make_grid(_complete_ref_img, nrow=1, normalize=True, scale_each=True)
         torchvision.utils.save_image(grid_img, f'tmp_imgs/ref_img_debug.pdf')
-        grid_img = torchvision.utils.make_grid(complete_gen_img_bin, nrow=2, normalize=True, scale_each=True)
+        grid_img = torchvision.utils.make_grid(_complete_gen_img_bin, nrow=1, normalize=True, scale_each=True)
         torchvision.utils.save_image(grid_img, f'tmp_imgs/gen_img_bin_debug.pdf')
-        grid_img = torchvision.utils.make_grid(complete_ref_img_bin, nrow=2, normalize=True, scale_each=True)
+        grid_img = torchvision.utils.make_grid(_complete_ref_img_bin, nrow=1, normalize=True, scale_each=True)
         torchvision.utils.save_image(grid_img, f'tmp_imgs/ref_img_bin_debug.pdf')
+        exit()
         
         # Compute accuracy 
         I = th.ones_like(_complete_ref_img)
@@ -693,8 +706,7 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
         gathered_scores["accuracy"] = ((i-1)/i)*gathered_scores["accuracy"] + scores["accuracy"]/i
         gathered_scores["precision"] = ((i-1)/i)*gathered_scores["precision"] + scores["precision"]/i
         gathered_scores["recall"] = ((i-1)/i)*gathered_scores["recall"] + scores["recall"]/i
-    
-    logger.log("Current training step:", step)
+
     logger.log("mse:", gathered_scores["mse"])
     logger.log("dice:", gathered_scores["dice"])
     logger.log("dice_tol:", gathered_scores["dice_tol"])
@@ -752,7 +764,8 @@ def main(args):
     if dist.get_rank() == 0:
         logger.log("creating data loader...")
 
-    data, test_data = load_data(
+
+    test_data = load_data(
         data_dir=args.data_dir,
         dataset=args.dataset,
         batch_size=batch_size,
@@ -775,7 +788,7 @@ def main(args):
         vae=vae,
         model=model,
         diffusion=diffusion,
-        train_data=data,
+        train_data=test_data,
         test_data=test_data,
         batch_size=batch_size,
         microbatch=args.microbatch,

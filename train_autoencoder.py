@@ -9,9 +9,6 @@
 
 import signal 
 import time
-
-from typing import Dict, Optional, Tuple, Union
-
 import os
 from pathlib import Path
 from glob import glob
@@ -19,6 +16,7 @@ import blobfile as bf
 import argparse
 import numpy as np
 import torch as th
+from torcheval.metrics.functional import multiclass_f1_score as F1
 import torch.distributed as dist
 import torchvision
 from torch.optim import RAdam
@@ -38,7 +36,8 @@ import lpips
 
 class VAETrainLoop():
     """
-    
+    Class for fine-tuning stable diffusions' auto-encoder on custom datasets with 
+    additional losses.
     """
 
     def __init__(
@@ -166,11 +165,129 @@ class VAETrainLoop():
         _save_checkpoint(self.model_params, for_preemption)
         dist.barrier()
 
-    def _log_step(self, loss_terms):
+    def log_step(self, loss_terms):
         logger.logkv("step", self.step)
         logger.logkv("loss_l2", loss_terms["loss_l2"])
         logger.logkv("loss_lpips", loss_terms["loss_lpips"])
         logger.logkv("loss", loss_terms["loss"])
+
+    def dice_coefficient(self, pred, target, epsilon=1e-6):
+        pred_flat = pred.view(-1)
+        target_flat = target.view(-1)
+        
+        # Calculate Dice coefficient
+        dice = F1(pred_flat, target_flat, num_classes=2)
+
+        return dice
+
+    def dice_loss(self, pred, target):
+        # Dice loss is 1 minus the Dice coefficient
+        return 1 - self.dice_coefficient(pred, target)
+
+    def get_eqv_op_pairs_aux_random(self, eqv):
+        # Randomly sample a pair of augmentation operators.
+        if eqv == 'H':
+            def aug_op(x):
+                return th.flip(x, [-1])
+
+            def aug_op_inv(x):
+                return th.flip(x, [-1])
+
+        elif eqv == 'V':
+            def aug_op(x):
+                return th.flip(x, [-2])
+                    
+            def aug_op_inv(x):
+                return th.flip(x, [-2])
+            
+        elif eqv == 'C4':
+            k = np.random.randint(1,4)
+
+            def aug_op(x):
+                return th.rot90(x, k = k, dims = [-1, -2])
+            
+            def aug_op_inv(x):
+                return th.rot90(x, k = k, dims = [-2, -1])
+            
+        elif eqv == 'D4':
+            k = np.random.randint(0, 4)
+            v_flip = np.random.randint(0, 2)
+
+            def aug_op(x):
+                return th.rot90(th.flip(x, [-2]) if v_flip else x, k = k, dims = [-1, -2])
+            
+            def aug_op_inv(x):
+                x_ = th.rot90(x, k = k, dims = [-2, -1])
+                return th.flip(x_, [-2]) if v_flip else x_
+
+        else:
+            raise NotImplementedError
+        
+        return aug_op, aug_op_inv
+
+
+    def get_eqv_op_pairs_aux_full(self, eqv):
+        # return all pairs of inv operator aug_op, aug_op_inv s.t aug_op (compose) aug_op_inv = Identity
+        Id = lambda x: x
+        
+        if eqv == 'H':
+            aug_pairs = [[Id, Id]]
+            def aug_op(x):
+                return th.flip(x, [-1])
+
+            def aug_op_inv(x):
+                return th.flip(x, [-1])
+            
+            aug_pairs.append([aug_op, aug_op_inv])
+
+        elif eqv == 'V':
+            aug_pairs = [[Id, Id]]
+            def aug_op(x):
+                return th.flip(x, [-2])
+                    
+            def aug_op_inv(x):
+                return th.flip(x, [-2])
+            
+            aug_pairs.append([aug_op, aug_op_inv])
+            
+        elif eqv == 'C4':
+            aug_pairs = [[Id, Id]]
+            for k in range(1, 4):
+                def aug_op(x):
+                    return th.rot90(x, k = k, dims = [-1, -2])
+
+                def aug_op_inv(x):
+                    return th.rot90(x, k = k, dims = [-2, -1])
+
+                aug_pairs.append([aug_op, aug_op_inv])
+    
+        elif eqv == 'D4':
+            aug_pairs = []
+
+            for k in range(0, 4):
+                for v_flip in [True, False]:
+                    def aug_op(x):
+                        return th.rot90(th.flip(x, [-2]) if v_flip else x, k = k, dims = [-1, -2])
+                    def aug_op_inv(x):
+                        x_ = th.rot90(x, k = k, dims = [-2, -1])
+                        return th.flip(x_, [-2]) if v_flip else x_
+
+                    aug_pairs.append([aug_op, aug_op_inv])  
+
+        else:
+            raise NotImplementedError
+        
+        return aug_pairs
+
+    def get_eqv_op_pairs(self, eqv, all_ops=True):
+        # return pairs of inv operator aug_op, aug_op_inv s.t aug_op (compose) aug_op_inv = Idenity
+        # the operator is randomly picked (with the identity one) if all_ops is False else all 
+        # the operators are returned in a list (including the idenity one)
+        if not all_ops:
+            return self.get_eqv_op_pairs_aux_random(eqv)
+        
+        else:
+            return self.get_eqv_op_pairs_aux_full(eqv)
 
     def encode(self, x):
         z = self.model.encode(x)
@@ -181,34 +298,13 @@ class VAETrainLoop():
         return x
 
     def forward(self, x, sample=True):
-        with th.no_grad_enabled(not self.decoder_only):
-            if sample:
-                if self.eqv == 'Z2':
-                    z = self.encode(x).latent_dist.sample()
-                elif self.eqv == 'C4':
-                    posterior = self.encode(x).latent_dist.sample()
-                    for rot in range(3):
-                        x = th.rot90(x)
-                        posterior += self.encode(x).latent_dist.sample()
-                    z = posterior/4.0
-            else:
-                if self.eqv == 'Z2':
-                    z = self.encode(x).latent_dist.mode()
-                elif self.eqv == 'C4':
-                    posterior = self.encode(x).latent_dist.mode()
-                    for rot in range(3):
-                        x = th.rot90(x)
-                        posterior += self.encode(x).latent_dist.mode()
-                    z = posterior/4.0
-        
-        if self.eqv == 'Z2':
-            x_hat = self.decode(z).sample
-        elif self.eqv == 'C4':
-            x_ = self.decode(z).sample
-            for rot in range(3):
-                x_ += th.rot90(x_)
-            x_hat = x_/4.0
+        if sample:
+            z = self.encode(x).latent_dist.sample()
+        else:
+            z = self.encode(x).latent_dist.mode()
 
+        x_hat = self.decode(z).sample
+        
         return x_hat
 
     def sample(self):
@@ -235,36 +331,82 @@ class VAETrainLoop():
         assert self.model.encoder.training or self.model.decoder.training
 
         def _compute_losses(x):
-            x_hat = self.forward(x)
-            loss_l2 = self.loss_fn_l2(x,x_hat)
-            loss_lpips = self.loss_fn_lpips(x,x_hat).mean()
-            loss_terms = {
-                "loss":self.weight_l2*loss_l2 + self.weight_lpips*loss_lpips,
-                "loss_l2":loss_l2,
-                "loss_lpips": loss_lpips
-            }
-            loss = (
-                self.weight_l2*loss_l2 + self.weight_lpips*loss_lpips
-            )
+            if self.eqv == 'Z2':
+                x_hat = self.forward(x)
+                loss_l2 = self.loss_fn_l2(x,x_hat)
+                loss_lpips = self.loss_fn_lpips(x,x_hat).mean()
+                loss_terms = {
+                    "loss":self.weight_l2*loss_l2 + self.weight_lpips*loss_lpips,
+                    "loss_l2":loss_l2,
+                    "loss_lpips": loss_lpips
+                }
+                loss = (
+                    self.weight_l2*loss_l2 + self.weight_lpips*loss_lpips
+                )
+            elif self.eqv == 'C4':
+                if self.eqv_reg == 'REG':
+                    aug_op, aug_op_inv = self.get_eqv_op_pairs(inv_reg = self.inv_type, all_ops = False)   
+                    posterior = self.model.encode(x).latent_dist
+                    with th.no_grad():
+                        posterior_aug = self.model.encode(aug_op(x)).latent_dist            
+
+                    m = posterior.mode()
+                    m_aug = aug_op_inv(posterior_aug.mode().detach())
+
+                    std = posterior.std
+                    std_aug = aug_op_inv(posterior_aug.std.detach())
+
+                    z = self._get_sample_(m, std)
+
+                    ## decoder
+                    aug_op, aug_op_inv = get_eqv_op_pairs(inv_reg = self.inv_type, all_ops = False)
+                    x_hat = self.model.decode(z).sample
+                    with th.no_grad():
+                        x_hat_aug = aug_op_inv(self.model.decode(aug_op(z)).sample.detach())
+
+
+                    ## compute loss
+
+                    # VAE reconstruction loss
+                    loss_l2 = self.loss_fn_l2(x, x_hat)
+                    loss_lpips = self.loss_fn_lpips(x, x_hat).mean()
+
+                    
+                    if use_dice_loss:
+                        loss_dice = dice_loss(0.5 * x.mean(dim = 1, keepdim = True) + 0.5, 0.5 * x_hat.mean(dim = 1, keepdim = True).clamp(-1,1) + 0.5).mean()
+                        with th.no_grad():
+                            disc_loss_dice = dice_loss(x.mean(dim = 1, keepdim = True)>0, x_hat.mean(dim = 1, keepdim = True)>0).mean()
+
+                    
+                    # VAE inv regularization loss
+                    enc_inv_m_l2 = self.reg_l2_enc_m(m, m_aug)
+                    enc_inv_std_l2 = self.reg_l2_enc_std(std, std_aug)
+                    dec_inv_l2 = self.reg_l2_dec(x_hat, x_hat_aug)
+                    inv_loss = enc_inv_m_l2 + enc_inv_std_l2 + dec_inv_l2
+
+                    training_loss = self.weight_l2*loss_l2 + self.weight_lpips*loss_lpips + self.reg_loss_weight * inv_loss
+                    if use_dice_loss:
+                        training_loss = training_loss + self.dice_loss_weight * loss_dice
+
+                elif self.eqv_reg == 'FA':
+                    
+
             return loss, loss_terms
 
-        # Zero grad before training step
-        # for param in self.model_params:
-        #     if param.grad is not None:
-        #         param.grad.zero_()
-        self.opt.zero_grad()
+        # mini-batch training 
+        for i, batch_ in enumerate([batch[:len(batch)//2], batch[len(batch)//2:]]):
+            batch_ = batch_.to(dist_util.dev())
+            loss, loss_terms = _compute_losses(batch_)
+            loss = loss/self.opt_freq/2
+            loss.backward()
 
-        batch = batch.to(dist_util.dev())
-
-        loss, loss_terms = _compute_losses(batch)
-        loss.backward()
-        self.opt.step()
-
-        # self._update_ema() # TODO: add ema and lr rate adjustments later
-        # self._anneal_lr()
+        if self.step % self.opt_freq == 0:
+            self.opt.step()
+            # Zero grad for next training step
+            self.opt.zero_grad()
 
         self.step += 1
-        self._log_step(loss_terms)
+        self.log_step(loss_terms)
 
     def run_loop(self):
         if self.decoder_only:
@@ -283,12 +425,14 @@ class VAETrainLoop():
             ):
                 self.save()
                 th.cuda.empty_cache()
+                dist.barrier()
 
             if (self.save_interval != -1 and 
                 self.step > 0 and 
                 self.step % self.sample_interval == 0
             ):
                 self.sample()
+                dist.barrier()
 
             batch = th.cat([next(data)[0] for data in self.data])
             self.train_step(batch)

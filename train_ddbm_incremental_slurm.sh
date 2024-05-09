@@ -14,7 +14,7 @@ echo "Job stared..."
 
 source activate ddbm
 
-source ./args.sh $DATSET vae_fives_patches $PRED vp $NGPU 1
+source ./args.sh $DATASET_NAME vae_fives_patches $PRED vp $NGPU 1
 
 NCCL_P2P_LEVEL=NVL mpiexec --use-hwthread-cpus --oversubscribe -n $NGPU python train_ddbm_incremental.py \
     --work_dir=$WORK_DIR --exp=$EXP --data_dir=$DATA_DIR --dataset=$DATASET \
