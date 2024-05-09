@@ -153,6 +153,11 @@ class KarrasDenoiser:
         
         assert model_kwargs is not None
 
+        grid_img = torchvision.utils.make_grid(x_start, nrow=1, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, f'tmp_imgs/x_start_debug.pdf')
+        grid_img = torchvision.utils.make_grid(model_kwargs['xT'], nrow=1, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, f'tmp_imgs/model_kwargs_debug.pdf')
+
         with th.no_grad():
             # Encode inputs 
             x_start_ = x_start
@@ -207,14 +212,14 @@ class KarrasDenoiser:
         # Decode model outputs
         # TODO: This code is commented out to perform gradient updates of diffusion model
         #       within the latent space only.
-        # with autocast(dtype=th.float16):
-        #     model_output = vae.decode(model_output).sample
-        #     denoised = vae.decode(denoised).sample
-        #     x_start = x_start_
-        # # Average all channels for computing loss 
-        # model_output = model_output.mean(dim=1, keepdim=True)
-        # denoised = denoised.mean(dim=1, keepdim=True)
-        # x_start = x_start.mean(dim=1, keepdim=True)
+        with autocast(dtype=th.float16):
+            model_output = vae.decode(model_output).sample
+            denoised = vae.decode(denoised).sample
+            x_start = x_start_
+        # Average all channels for computing loss 
+        model_output = model_output.mean(dim=1, keepdim=True)
+        denoised = denoised.mean(dim=1, keepdim=True)
+        x_start = x_start.mean(dim=1, keepdim=True)            
 
         # Compute DICE regularization loss term 
         dice_loss = 0

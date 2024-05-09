@@ -166,8 +166,6 @@ class EdgesDataset(torch.utils.data.Dataset):
         rotate_image = get_rotation(params, rotate=self.rotate)
         transform_image = get_transform(params, self.resize_size, self.crop_size, crop=self.random_crop, flip=self.random_flip)
 
-        # A = transform_image(rotate_image(A))
-        # B = transform_image(rotate_image(B))
         A = transform_image(A)
         B = transform_image(B)
 

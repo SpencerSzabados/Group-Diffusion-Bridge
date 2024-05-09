@@ -223,7 +223,7 @@ class TrainLoop:
                     return
 
                 # scale to [-1, 1]
-                batch = self.preprocess(batch) # TODO: removed for testing 
+                batch = self.preprocess(batch) 
 
                 # Mask input if mask exists
                 if mask[0] != -1 and mask is not None:
@@ -232,15 +232,13 @@ class TrainLoop:
                 if self.augment is not None:
                     batch, _ = self.augment(batch)
                 if isinstance(cond, th.Tensor) and batch.ndim == cond.ndim:
-                    xT = self.preprocess(cond) # TODO: removed for testing
-                    # xT = cond
+                    xT = self.preprocess(cond) 
                     # Mask input if mask exists
                     if mask[0] != -1 and mask is not None:
                         cond = xT*mask
                     cond = {'xT': xT}
                 else:
-                    cond['xT'] = self.preprocess(cond['xT']) # TODO: removed for testing
-                    # cond['xT'] = cond['xT']
+                    cond['xT'] = self.preprocess(cond['xT']) 
 
                 took_step = self.run_step(batch, cond, mask=mask, dice_weight=self.dice_weight, dice_tol=self.dice_tol)
                 if took_step and self.step % self.log_interval == 0:

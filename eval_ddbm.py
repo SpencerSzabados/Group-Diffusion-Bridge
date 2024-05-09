@@ -47,6 +47,8 @@ def create_argparser():
         work_dir="",
         dataset='edges2handbags',
         schedule_sampler="uniform",
+        sigma_min=0.0001,
+        sigma_max=1.0,
         lr=1e-4,
         weight_decay=0.0,
         lr_anneal_steps=0,
@@ -441,7 +443,7 @@ def training_sample(diffusion, model, vae, data, num_samples, args):
     +-----------+   
     |   Cond    |   These images are saved to the temp folder tmp_imgs and are    
     +-----------+   labed with the current training step number of the model.
-    |   Refer   |
+    |   Ref     |
     +-----------+   
     |   Sample  |
     +-----------+
@@ -510,6 +512,8 @@ def training_sample(diffusion, model, vae, data, num_samples, args):
         with autocast(dtype=th.float32):
             sample = vae.decode(emb_sample).sample
 
+    dist.barrier()
+
     if mask[0] != -1 and mask is not None:
         sample = sample*mask
 
@@ -526,35 +530,26 @@ def training_sample(diffusion, model, vae, data, num_samples, args):
     torchvision.utils.save_image(grid_img, f'tmp_imgs/eval_ddbm_sample.pdf')
 
 
-def calculate_metrics(diffusion, model, vae, data, args, num_samples=1000):
+def calculate_metrics(diffusion, model, vae, data, args, num_samples=200):
     """
     Draws a random sample of conditional images from the test dataset and generates
     samples from these in order to compute the F1 (Dice) score of the model. This is
     used for image segementation accuracy evaluation.
     """
-    if args.multi_gpu_sampling:  
-        # Move models to seperate gpus due to memory restictions 
-        print("Generating smaples...")
-        print("Moving models to different devices...")
-        vae.to("cuda:1")
-        model.to("cuda:0")
 
-    def _sample():
+    def _sample(test_batch, test_cond, mask):
         """
         Generate a large set of sample images from model for use in computing metrics.
         """
-        test_batch, test_cond, _, mask = next(iter(data))
-        test_batch = test_batch[0]
-        test_cond = test_cond[0] 
 
         test_batch = test_batch.to(dist_util.dev())
         test_cond = test_cond.to(dist_util.dev())
         mask = mask.to(dist_util.dev())
 
-        # grid_img = torchvision.utils.make_grid(test_batch, nrow=1, normalize=True, scale_each=True)
-        # torchvision.utils.save_image(grid_img, f'tmp_imgs/test_batch_debug.pdf')
-        # grid_img = torchvision.utils.make_grid(test_cond, nrow=1, normalize=True, scale_each=True)
-        # torchvision.utils.save_image(grid_img, f'tmp_imgs/test_cond_debug.pdf')
+        grid_img = torchvision.utils.make_grid(test_batch, nrow=1, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, f'tmp_imgs/test_batch_debug.pdf')
+        grid_img = torchvision.utils.make_grid(test_cond, nrow=1, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, f'tmp_imgs/test_cond_debug.pdf')
 
         test_batch = preprocess(test_batch)
 
@@ -570,7 +565,6 @@ def calculate_metrics(diffusion, model, vae, data, args, num_samples=1000):
             test_cond = {'xT': test_xT}
         else:
             test_cond['xT'] = preprocess(test_cond['xT'])
-            # test_cond['xT'] = test_cond['xT']
 
         with th.no_grad():
             with autocast(dtype=th.float32):
@@ -581,20 +575,24 @@ def calculate_metrics(diffusion, model, vae, data, args, num_samples=1000):
                 diffusion,
                 model,
                 emb_test_xT,
-                emb_test_batch,
+                test_batch,
                 steps=40,
                 model_kwargs={'xT': emb_test_xT},
                 clip_denoised=True,
                 sampler='heun',
                 sigma_min=args.sigma_min,
                 sigma_max=args.sigma_max,
-                guidance=1
+                churn_step_ratio=0.0,
+                rho=7.0,
+                guidance=1.0,
             )
             with autocast(dtype=th.float32):
                 sample = vae.decode(emb_sample).sample
 
         if mask[0] != -1 and mask is not None:
             sample = sample*mask
+
+        dist.barrier()
 
         sample = sample.contiguous().detach().cpu()
         test_xT = test_xT.contiguous().detach().cpu()
@@ -623,10 +621,6 @@ def calculate_metrics(diffusion, model, vae, data, args, num_samples=1000):
             complete_gen_img[0, :, x_offset:(x_offset + patch_size), y_offset:(y_offset + patch_size)] = gen_img[i]
             complete_ref_img[0, :, x_offset:(x_offset + patch_size), y_offset:(y_offset + patch_size)] = ref_img[i]
 
-        # Average channels together 
-        complete_gen_img = complete_gen_img.mean(dim=1, keepdim=True)
-        complete_ref_img = complete_ref_img.mean(dim=1, keepdim=True)
-
         print(complete_gen_img)
         logger.log(complete_gen_img.shape)
 
@@ -635,11 +629,16 @@ def calculate_metrics(diffusion, model, vae, data, args, num_samples=1000):
 
         # Compute DICE loss
         # Test if images are single channel and if not convert them to single channel by averaging
-        if complete_ref_img.shape[0] == 3:
+        if complete_ref_img.shape[1] == 3:
             complete_ref_img = complete_ref_img.mean(dim=1, keepdim=True)
             complete_gen_img = complete_gen_img.mean(dim=1, keepdim=True)
-        elif complete_ref_img.shape[0] > 3:
+        elif complete_ref_img.shape[1] > 3:
             raise ValueError(f"Number of output channels must be either {1} or {3}.")
+        
+        grid_img = torchvision.utils.make_grid(complete_gen_img, nrow=1, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, f'tmp_imgs/gen_img_debug.pdf')
+        grid_img = torchvision.utils.make_grid(complete_ref_img, nrow=1, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, f'tmp_imgs/ref_img_debug.pdf')
         
         _complete_gen_img = complete_gen_img
         _complete_ref_img = complete_ref_img
@@ -654,15 +653,10 @@ def calculate_metrics(diffusion, model, vae, data, args, num_samples=1000):
         _complete_ref_img_bin = (_complete_ref_img >= 0.5).float() 
         dice_tol = F1(complete_gen_img_bin, complete_ref_img_bin, num_classes=2)
 
-        # grid_img = torchvision.utils.make_grid(_complete_gen_img, nrow=1, normalize=True, scale_each=True)
-        # torchvision.utils.save_image(grid_img, f'tmp_imgs/gen_img_debug.pdf')
-        # grid_img = torchvision.utils.make_grid(_complete_ref_img, nrow=1, normalize=True, scale_each=True)
-        # torchvision.utils.save_image(grid_img, f'tmp_imgs/ref_img_debug.pdf')
-        # grid_img = torchvision.utils.make_grid(_complete_gen_img_bin, nrow=1, normalize=True, scale_each=True)
-        # torchvision.utils.save_image(grid_img, f'tmp_imgs/gen_img_bin_debug.pdf')
-        # grid_img = torchvision.utils.make_grid(_complete_ref_img_bin, nrow=1, normalize=True, scale_each=True)
-        # torchvision.utils.save_image(grid_img, f'tmp_imgs/ref_img_bin_debug.pdf')
-        # exit()
+        grid_img = torchvision.utils.make_grid(_complete_gen_img_bin, nrow=1, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, f'tmp_imgs/gen_img_bin_debug.pdf')
+        grid_img = torchvision.utils.make_grid(_complete_ref_img_bin, nrow=1, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, f'tmp_imgs/ref_img_bin_debug.pdf')
         
         # Compute accuracy 
         I = th.ones_like(_complete_ref_img)
@@ -696,9 +690,13 @@ def calculate_metrics(diffusion, model, vae, data, args, num_samples=1000):
     gathered_scores = {"mse":0, "dice":0, "dice_tol":0, "accuracy":0, "precision":0, "recall":0}
     num_inter = num_samples//batch_size
 
-    for i in tqdm(range(1,(num_inter+1))):
+    i = 1
+    for test_batch, test_cond, _, mask in tqdm(data):
         # Generate samples from model to compute f1 score against and fid
-        sample, target, mask = _sample()
+        test_batch = test_batch[0]
+        test_cond = test_cond[0] 
+        
+        sample, target, mask = _sample(test_batch, test_cond, mask)
         scores = _compute_scores(sample, target)
         # update averages 
         gathered_scores["mse"] = ((i-1)/i)*gathered_scores["mse"] + scores["mse"]/i
@@ -707,6 +705,8 @@ def calculate_metrics(diffusion, model, vae, data, args, num_samples=1000):
         gathered_scores["accuracy"] = ((i-1)/i)*gathered_scores["accuracy"] + scores["accuracy"]/i
         gathered_scores["precision"] = ((i-1)/i)*gathered_scores["precision"] + scores["precision"]/i
         gathered_scores["recall"] = ((i-1)/i)*gathered_scores["recall"] + scores["recall"]/i
+
+        i += 1
 
     logger.log("mse:", gathered_scores["mse"])
     logger.log("dice:", gathered_scores["dice"])
@@ -729,7 +729,7 @@ def main(args):
     if dist.get_rank() == 0:
         name = args.exp if args.resume_checkpoint == "" else args.exp + '_resume'
         logger.log("creating model and diffusion...")
-    
+
     if args.resume_checkpoint == "":
         model_ckpts = list(glob(f'{workdir}/*model*[0-9].*'))
         if len(model_ckpts) > 0:
@@ -749,7 +749,6 @@ def main(args):
         **args_to_dict(args, model_and_diffusion_defaults().keys())
     )
     model.to(dist_util.dev())
-    model.eval()
 
     schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)
     
@@ -813,7 +812,7 @@ def main(args):
     )
 
     model.eval()
-    training_sample(diffusion, model, vae, test_data, 2, args)
+    training_sample(diffusion, model, vae, test_data, 4, args)
     calculate_metrics(diffusion, model, vae, test_data, args)
 
 
