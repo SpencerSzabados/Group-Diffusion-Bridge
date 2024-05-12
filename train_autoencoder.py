@@ -31,6 +31,7 @@ from ddbm.script_util import (
 )
 
 from diffusers.models import AutoencoderKL
+from diffusers.utils.torch_utils import randn_tensor
 import lpips
 
 
@@ -46,6 +47,8 @@ class VAETrainLoop():
         resume_checkpoint,
         data,
         image_size,
+        microbatch,
+        global_batch_size,
         batch_size,
         lr,
         ema_rate,
@@ -53,8 +56,10 @@ class VAETrainLoop():
         lr_anneal_steps=0,
         weight_l2=0.5,
         weight_lpips=0.002,
+        weight_reg=0.001,
         fp16=False,
         eqv='Z2',
+        eqv_reg="None",
         decoder_only=False,
         log_interval=1000,
         sample_interval=1000,
@@ -69,7 +74,13 @@ class VAETrainLoop():
         else:
             self.data = data
         self.image_size = image_size
+        self.microbatch = microbatch
+        self.global_batch_size = global_batch_size
         self.batch_size = batch_size
+        if self.microbatch != -1:
+            self.opt_freq = self.global_batch_size//self.batch_size
+        else:
+            self.opt_freq = 1
         self.augment = augment
         # Model training paramters
         self.step = 0
@@ -78,6 +89,7 @@ class VAETrainLoop():
         self.weight_decay = weight_decay
         self.weight_l2 = weight_l2
         self.weight_lpips = weight_lpips
+        self.weight_reg = weight_reg
         self.lr_anneal_steps = lr_anneal_steps
         self.total_training_steps = total_training_steps
         # Logging paramters 
@@ -94,10 +106,16 @@ class VAETrainLoop():
         )
         self.fp16 = fp16
         self.eqv = eqv
+        self.eqv_reg = eqv_reg
         self.decoder_only = decoder_only
 
         self.loss_fn_l2 = th.nn.MSELoss()
         self.loss_fn_lpips = lpips.LPIPS().to(dist_util.dev())
+        if self.eqv_reg != "None":
+            self.reg_l2_enc_m = th.nn.MSELoss()
+            self.reg_l2_enc_std = th.nn.MSELoss()
+            self.reg_l2_dec = th.nn.MSELoss()
+            self.reg_loss_weight = 0.001
 
         if self.resume_checkpoint != "":
             self.resume_step = self._parse_resume_step_from_filename(resume_checkpoint)
@@ -307,19 +325,27 @@ class VAETrainLoop():
         
         return x_hat
 
-    def sample(self):
+    def _get_sample(self, m, std):
+        return randn_tensor(
+            m.shape,
+            generator=None,
+            device=m.device,
+            dtype=m.dtype,
+        ) * std + m
+
+    def traning_sample(self):
         self.model.eval()
+        with th.no_grad():
+            batch = th.cat([next(data)[0] for data in self.data])
+            batch = batch.to(dist_util.dev())
+            x_hat = self.forward(batch, sample=False)
+            sample_grid = th.cat([batch, x_hat], dim=0)
 
-        batch = th.cat([next(data)[0] for data in self.data])
-        batch = batch.to(dist_util.dev())
-        x_hat = self.forward(batch, sample=False)
-        sample_grid = th.cat([batch, x_hat], dim=0)
-
-        sample_dir = bf.join(logger.get_dir(), "samples")
-        if dist.get_rank() == 0:
-            os.makedirs(sample_dir, exist_ok=True)
-            
-        torchvision.utils.save_image((sample_grid+1.)/2., bf.join(sample_dir, f"{self.step}.png"), nrow=batch.shape[0])       
+            sample_dir = bf.join(logger.get_dir(), "samples")
+            if dist.get_rank() == 0:
+                os.makedirs(sample_dir, exist_ok=True)
+                
+            torchvision.utils.save_image((sample_grid+1.)/2., bf.join(sample_dir, f"{self.step}.png"), nrow=batch.shape[0])       
 
         if self.decoder_only:
             self.model.encoder.eval()
@@ -336,17 +362,21 @@ class VAETrainLoop():
                 loss_l2 = self.loss_fn_l2(x,x_hat)
                 loss_lpips = self.loss_fn_lpips(x,x_hat).mean()
                 loss_terms = {
-                    "loss":self.weight_l2*loss_l2 + self.weight_lpips*loss_lpips,
-                    "loss_l2":loss_l2,
+                    "loss": self.weight_l2*loss_l2 + self.weight_lpips*loss_lpips,
+                    "loss_l2": loss_l2,
                     "loss_lpips": loss_lpips
                 }
                 loss = (
-                    self.weight_l2*loss_l2 + self.weight_lpips*loss_lpips
+                    loss_terms["loss"]
                 )
+
             elif self.eqv == 'C4':
                 if self.eqv_reg == 'REG':
-                    aug_op, aug_op_inv = self.get_eqv_op_pairs(inv_reg = self.inv_type, all_ops = False)   
-                    posterior = self.model.encode(x).latent_dist
+                    aug_op, aug_op_inv = self.get_eqv_op_pairs(eqv = self.eqv, all_ops = False)  
+                    
+                    with th.set_grad_enabled(self.decoder_only): 
+                        posterior = self.model.encode(x).latent_dist
+
                     with th.no_grad():
                         posterior_aug = self.model.encode(aug_op(x)).latent_dist            
 
@@ -356,27 +386,18 @@ class VAETrainLoop():
                     std = posterior.std
                     std_aug = aug_op_inv(posterior_aug.std.detach())
 
-                    z = self._get_sample_(m, std)
+                    z = self._get_sample(m, std)
 
                     ## decoder
-                    aug_op, aug_op_inv = get_eqv_op_pairs(inv_reg = self.inv_type, all_ops = False)
+                    aug_op, aug_op_inv = self.get_eqv_op_pairs(eqv = self.eqv, all_ops = False)
                     x_hat = self.model.decode(z).sample
+
                     with th.no_grad():
                         x_hat_aug = aug_op_inv(self.model.decode(aug_op(z)).sample.detach())
-
-
-                    ## compute loss
 
                     # VAE reconstruction loss
                     loss_l2 = self.loss_fn_l2(x, x_hat)
                     loss_lpips = self.loss_fn_lpips(x, x_hat).mean()
-
-                    
-                    if use_dice_loss:
-                        loss_dice = dice_loss(0.5 * x.mean(dim = 1, keepdim = True) + 0.5, 0.5 * x_hat.mean(dim = 1, keepdim = True).clamp(-1,1) + 0.5).mean()
-                        with th.no_grad():
-                            disc_loss_dice = dice_loss(x.mean(dim = 1, keepdim = True)>0, x_hat.mean(dim = 1, keepdim = True)>0).mean()
-
                     
                     # VAE inv regularization loss
                     enc_inv_m_l2 = self.reg_l2_enc_m(m, m_aug)
@@ -385,24 +406,86 @@ class VAETrainLoop():
                     inv_loss = enc_inv_m_l2 + enc_inv_std_l2 + dec_inv_l2
 
                     training_loss = self.weight_l2*loss_l2 + self.weight_lpips*loss_lpips + self.reg_loss_weight * inv_loss
-                    if use_dice_loss:
-                        training_loss = training_loss + self.dice_loss_weight * loss_dice
+                    
+                    loss_terms = {
+                        "loss": training_loss,
+                        "loss_l2": loss_l2,
+                        "loss_lpips": loss_lpips,
+                        "enc_inv_m_l2": enc_inv_m_l2,
+                        "enc_inv_std_l2": enc_inv_std_l2,
+                        "dec_inv_l2": dec_inv_l2,
+                        "inv_loss": inv_loss,
+                    }
+
+                    loss = training_loss
 
                 elif self.eqv_reg == 'FA':
-                    
+                    ## using Frame Averaging
+                    op_pairs = self.get_eqv_op_pairs(eqv = self.eqv, all_ops = True)
 
+                    ## encoder
+                    m = 0
+                    std = 0
+                    for pair in op_pairs:
+                        aug_op, aug_op_inv = pair
+                        with th.set_grad_enabled(self.decoder_only):
+                            posterior = self.model.encode(aug_op(x)).latent_dist
+                        m = m + aug_op_inv(posterior.mode())
+                        std = std + aug_op_inv(posterior.std)
+
+                    m = m / len(op_pairs)
+                    std = std / len(op_pairs)
+                    z = self._get_sample(m, std)
+
+                    ## decoder
+                    x_hat = 0
+                    for pair in op_pairs:
+                        aug_op, aug_op_inv = pair
+                        x_hat = x_hat + aug_op_inv(self.model.decode(aug_op(z)).sample)
+                    
+                    x_hat = x_hat / len(op_pairs)
+
+                    ## compute loss
+                    loss_l2 = self.loss_fn_l2(x, x_hat)
+                    loss_lpips = self.loss_fn_lpips(x,x_hat).mean()
+                
+                    training_loss = self.weight_l2*loss_l2 + self.weight_lpips*loss_lpips 
+
+                    loss_terms = {
+                        "loss":training_loss,
+                        "loss_l2":loss_l2,
+                        "loss_lpips": loss_lpips,
+                    }
+
+                    loss = (
+                        training_loss
+                    )
+
+                else:
+                    raise NotImplementedError(f"Please select eqv_reg from either (REG, FA).")
+                    
             return loss, loss_terms
 
         # mini-batch training 
-        for i, batch_ in enumerate([batch[:len(batch)//2], batch[len(batch)//2:]]):
-            batch_ = batch_.to(dist_util.dev())
-            loss, loss_terms = _compute_losses(batch_)
-            loss = loss/self.opt_freq/2
+        if self.microbatch != -1:
+            for i in range(0, len(batch), self.microbatch):
+                batch_ = batch[i:min((i+self.microbatch),len(batch))]
+                batch_ = batch_.to(dist_util.dev())
+                loss, loss_terms = _compute_losses(batch_)
+                loss = loss/self.opt_freq # Changed from loss/self.opt_freq/2
+                loss.backward()
+        else:
+            loss, loss_terms = _compute_losses(batch)
             loss.backward()
 
-        if self.step % self.opt_freq == 0:
+        if self.microbatch != -1:
+            if self.step % self.opt_freq == 0:
+                self.opt.step()
+                # Zero grad for next training step
+                self.opt.zero_grad()
+        else:
             self.opt.step()
-            # Zero grad for next training step
+                # Zero grad for next training step
             self.opt.zero_grad()
 
         self.step += 1
@@ -431,7 +514,7 @@ class VAETrainLoop():
                 self.step > 0 and 
                 self.step % self.sample_interval == 0
             ):
-                self.sample()
+                self.traning_sample()
                 dist.barrier()
 
             batch = th.cat([next(data)[0] for data in self.data])
@@ -484,6 +567,7 @@ def create_argparser():
         weight_lpips=0.002,
         fp16=False,
         eqv='Z2',
+        eqv_reg="REG",
         decoder_only=False,
         log_interval=50,
         sample_interval=1000,
@@ -554,6 +638,8 @@ def main(args):
             resume_checkpoint=args.resume_checkpoint,
             data=data,
             image_size=args.image_size,
+            microbatch=args.microbatch,
+            global_batch_size=args.global_batch_size,
             batch_size=batch_size,
             lr=args.lr,
             ema_rate=args.ema_rate,
@@ -562,6 +648,7 @@ def main(args):
             weight_lpips=args.weight_lpips,
             fp16=args.fp16,
             eqv=args.eqv,
+            eqv_reg=args.eqv_reg,
             decoder_only=args.decoder_only,
             lr_anneal_steps=args.lr_anneal_steps,
             log_interval=args.log_interval,

@@ -221,7 +221,7 @@ def load_data(
   elif dataset == 'fives_patches':
     from .aligned_dataset import EdgesDataset
     trainset = EdgesDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels,
-                                random_crop=True, random_flip=True, rotate=True, angle=90)
+                                random_crop=False, random_flip=False, rotate=True, angle=90)
     valset = EdgesDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels,
                                 random_crop=False, random_flip=False, rotate=True, angle=90)
     if include_test:

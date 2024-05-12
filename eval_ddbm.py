@@ -408,7 +408,7 @@ def load_data(
     root = data_dir
 
     if dataset == 'fives':
-        valset = GridEdgesDataset(dataroot=root, train=False, img_size=image_size, num_channels=num_channels,
+        valset = GridEdgesDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels,
                                 random_crop=False, random_flip=False, rotate=True, angle=90)
 
     num_tasks = dist.get_world_size()
@@ -468,9 +468,9 @@ def training_sample(diffusion, model, vae, data, num_samples, args):
     if mask[0] != -1 and mask is not None:
         mask = mask[0:num_samples]
 
-    test_batch = test_batch.to(dist_util.dev())
-    test_cond = test_cond.to(dist_util.dev())
-    mask = mask.to(dist_util.dev())
+    test_batch = test_batch.to(th.float32).to(dist_util.dev())
+    test_cond = test_cond.to(th.float32).to(dist_util.dev())
+    mask = mask.to(th.float32).to(dist_util.dev())
 
     test_batch = preprocess(test_batch)
 
@@ -487,29 +487,29 @@ def training_sample(diffusion, model, vae, data, num_samples, args):
         test_cond['xT'] = preprocess(test_cond['xT'])
 
     with th.no_grad():
-        with autocast(dtype=th.float32):
+        with autocast(dtype=th.float16):
             emb_test_batch = vae.encode(test_batch).latent_dist.mode()
             emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
-
-        logger.log("Generating samples...")
         
-        gathered = th.cat((test_xT,test_batch),0).contiguous().detach().cpu()
-        # normalize values of gathered to the same scale as the model output 
+            logger.log("Generating samples...")
+            
+            gathered = th.cat((test_xT,test_batch),0).contiguous().detach().cpu()
+            # normalize values of gathered to the same scale as the model output 
 
-        emb_sample, path, nfe = karras_sample(
-            diffusion,
-            model,
-            emb_test_xT,
-            emb_test_batch,
-            steps=40,
-            model_kwargs={'xT': emb_test_xT},
-            clip_denoised=True,
-            sampler='heun',
-            sigma_min=args.sigma_min,
-            sigma_max=args.sigma_max,
-            guidance=1
-        )
-        with autocast(dtype=th.float32):
+            emb_sample, path, nfe = karras_sample(
+                diffusion,
+                model,
+                emb_test_xT,
+                emb_test_batch,
+                steps=40,
+                model_kwargs={'xT': emb_test_xT},
+                clip_denoised=False,
+                sampler='heun',
+                sigma_min=args.sigma_min,
+                sigma_max=args.sigma_max,
+                guidance=1
+            )
+
             sample = vae.decode(emb_sample).sample
 
     dist.barrier()
@@ -542,9 +542,9 @@ def calculate_metrics(diffusion, model, vae, data, args, num_samples=200):
         Generate a large set of sample images from model for use in computing metrics.
         """
 
-        test_batch = test_batch.to(dist_util.dev())
-        test_cond = test_cond.to(dist_util.dev())
-        mask = mask.to(dist_util.dev())
+        test_batch = test_batch.to(th.float32).to(dist_util.dev())
+        test_cond = test_cond.to(th.float32).to(dist_util.dev())
+        mask = mask.to(th.float32).to(dist_util.dev())
 
         grid_img = torchvision.utils.make_grid(test_batch, nrow=1, normalize=True, scale_each=True)
         torchvision.utils.save_image(grid_img, f'tmp_imgs/test_batch_debug.pdf')
@@ -567,26 +567,26 @@ def calculate_metrics(diffusion, model, vae, data, args, num_samples=200):
             test_cond['xT'] = preprocess(test_cond['xT'])
 
         with th.no_grad():
-            with autocast(dtype=th.float32):
+            with autocast(dtype=th.float16):
                 emb_test_batch = vae.encode(test_batch).latent_dist.mode()
                 emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
 
-            emb_sample, path, nfe = karras_sample(
-                diffusion,
-                model,
-                emb_test_xT,
-                test_batch,
-                steps=40,
-                model_kwargs={'xT': emb_test_xT},
-                clip_denoised=True,
-                sampler='heun',
-                sigma_min=args.sigma_min,
-                sigma_max=args.sigma_max,
-                churn_step_ratio=0.0,
-                rho=7.0,
-                guidance=1.0,
-            )
-            with autocast(dtype=th.float32):
+                emb_sample, path, nfe = karras_sample(
+                    diffusion,
+                    model,
+                    emb_test_xT,
+                    emb_test_batch,
+                    steps=40,
+                    model_kwargs={'xT': emb_test_xT},
+                    clip_denoised=False,
+                    sampler='heun',
+                    sigma_min=args.sigma_min,
+                    sigma_max=args.sigma_max,
+                    churn_step_ratio=0.0,
+                    rho=7.0,
+                    guidance=1.0,
+                )
+
                 sample = vae.decode(emb_sample).sample
 
         if mask[0] != -1 and mask is not None:
@@ -598,6 +598,9 @@ def calculate_metrics(diffusion, model, vae, data, args, num_samples=200):
         test_xT = test_xT.contiguous().detach().cpu()
         test_batch = test_batch.contiguous().detach().cpu()
         mask = mask.contiguous().detach().cpu()
+
+        grid_img = torchvision.utils.make_grid(sample, nrow=1, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, f'tmp_imgs/sample_debug.pdf')
 
         return sample, test_batch, mask
 
@@ -620,9 +623,6 @@ def calculate_metrics(diffusion, model, vae, data, args, num_samples=200):
             x_offset = patch_size*(i%4)
             complete_gen_img[0, :, x_offset:(x_offset + patch_size), y_offset:(y_offset + patch_size)] = gen_img[i]
             complete_ref_img[0, :, x_offset:(x_offset + patch_size), y_offset:(y_offset + patch_size)] = ref_img[i]
-
-        print(complete_gen_img)
-        logger.log(complete_gen_img.shape)
 
         # Compute MSE
         mse = mean_flat((complete_gen_img-complete_ref_img)**2)
@@ -748,9 +748,13 @@ def main(args):
     model, diffusion = create_model_and_diffusion(
         **args_to_dict(args, model_and_diffusion_defaults().keys())
     )
+    model.load_state_dict(
+                # dist_util.load_state_dict(
+                #     resume_checkpoint, map_location=dist_util.dev()
+                # ),
+                th.load(args.resume_checkpoint, map_location=dist_util.dev()),
+            )
     model.to(dist_util.dev())
-
-    schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)
     
     if args.batch_size == -1:
         batch_size = args.global_batch_size // dist.get_world_size()
@@ -772,43 +776,6 @@ def main(args):
         image_size=args.data_image_size,
         num_channels=args.data_image_channels,
         num_workers=args.num_workers,
-    )
-    
-    if args.use_augment:
-        augment = AugmentPipe(
-                p=0.12,xflip=1e8, yflip=1, scale=1, rotate_frac=1, aniso=1, translate_frac=1
-            )
-    else:
-        augment = None
-        
-    logger.log(args)
-
-    logger.log("training...")
-    trainloop = TrainLoop(
-        vae=vae,
-        model=model,
-        diffusion=diffusion,
-        train_data=test_data,
-        test_data=test_data,
-        batch_size=batch_size,
-        microbatch=args.microbatch,
-        lr=args.lr,
-        ema_rate=args.ema_rate,
-        dice_weight=args.dice_weight,
-        dice_tol=args.dice_tol,
-        log_interval=args.log_interval,
-        test_interval=args.test_interval,
-        save_interval=args.save_interval,
-        save_interval_for_preemption=args.save_interval_for_preemption,
-        resume_checkpoint=args.resume_checkpoint,
-        workdir=workdir,
-        use_fp16=args.use_fp16,
-        fp16_scale_growth=args.fp16_scale_growth,
-        schedule_sampler=schedule_sampler,
-        weight_decay=args.weight_decay,
-        lr_anneal_steps=args.lr_anneal_steps,
-        augment_pipe=augment,
-        **sample_defaults()
     )
 
     model.eval()

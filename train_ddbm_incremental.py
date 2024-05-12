@@ -94,14 +94,7 @@ def training_sample(diffusion, model, vae, data, num_samples, step, args):
     +-----------+
     |   MSE     |
     +-----------+
-    """
-    if args.multi_gpu_sampling:
-        # Move models to seperate gpus due to memory restictions 
-        print("Generating training smaple...")
-        print("Moving models to different devices...")
-        vae.to("cuda:1")
-        model.to("cuda:0")
-    
+    """    
     test_batch, test_cond, _, mask = next(iter(data))
     batch_size = len(test_batch)
 
@@ -134,40 +127,16 @@ def training_sample(diffusion, model, vae, data, num_samples, step, args):
 
     with th.no_grad():
         # Pass data into encoder
-        if args.multi_gpu_sampling:
-            with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
-                with autocast(dtype=th.float32):
-                    emb_test_batch = vae.encode(test_batch).latent_dist.mode()
-                    emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
-        else:
-            with autocast(dtype=th.float32):
-                emb_test_batch = vae.encode(test_batch).latent_dist.mode()
-                emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
+        with autocast(dtype=th.float32):
+            emb_test_batch = vae.encode(test_batch).latent_dist.mode()
+            emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
 
         logger.log("Generating samples...")
         
         gathered = th.cat((test_xT,test_batch),0).contiguous().detach().cpu()
         # normalize values of gathered to the same scale as the model output 
 
-        if args.multi_gpu_sampling:
-            with th.cuda.device('cuda:0'):
-                emb_sample, path, nfe = karras_sample(
-                    diffusion,
-                    model,
-                    emb_test_xT,
-                    emb_test_batch,
-                    steps=40,
-                    model_kwargs={'xT': emb_test_xT},
-                    clip_denoised=True,
-                    sampler='heun',
-                    sigma_min=args.sigma_min,
-                    sigma_max=args.sigma_max,
-                    guidance=1
-                )
-            with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
-                with autocast(dtype=th.float32):
-                    sample = vae.decode(emb_sample).sample
-        else:
+        with autocast(dtype=th.float16):
             emb_sample, path, nfe = karras_sample(
                 diffusion,
                 model,
@@ -175,27 +144,21 @@ def training_sample(diffusion, model, vae, data, num_samples, step, args):
                 emb_test_batch,
                 steps=40,
                 model_kwargs={'xT': emb_test_xT},
-                clip_denoised=True,
+                clip_denoised=False,
                 sampler='heun',
                 sigma_min=args.sigma_min,
                 sigma_max=args.sigma_max,
                 guidance=1
             )
-            with autocast(dtype=th.float32):
-                sample = vae.decode(emb_sample).sample
+
+        with autocast(dtype=th.float32):
+            sample = vae.decode(emb_sample).sample
 
     if mask[0] != -1 and mask is not None:
         sample = sample*mask
 
     sample = sample.contiguous().detach().cpu()
     test_batch = test_batch.contiguous().detach().cpu()
-
-    # if th.min(test_batch) <= 0 or th.max(test_batch) >= 1:
-    #     test_batch = (test_batch+1.)/2.
-    # if th.min(test_xT) <= 0. or th.max(test_xT) >= 1.:
-    #     test_xT = (test_xT+1.)/2.
-    # if th.min(sample) <= 0. or th.max(sample) >= 1.:
-    #     sample = (sample+1.)/2.
 
     gathered = th.cat((gathered, sample), 0)
     # Compute solution difference
@@ -213,19 +176,11 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
     samples from these in order to compute the F1 (Dice) score of the model. This is
     used for image segementation accuracy evaluation.
     """
-    if args.multi_gpu_sampling:  
-        # Move models to seperate gpus due to memory restictions 
-        print("Generating smaples...")
-        print("Moving models to different devices...")
-        vae.to("cuda:1")
-        model.to("cuda:0")
 
-    def _sample():
+    def _sample(test_batch, test_cond, mask):
         """
         Generate a large set of sample images from model for use in computing metrics.
         """
-        test_batch, test_cond, _, mask = next(iter(data))   
-
         test_batch = test_batch.to(dist_util.dev())
         test_cond = test_cond.to(dist_util.dev())
         mask = mask.to(dist_util.dev())
@@ -247,37 +202,11 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
             # test_cond['xT'] = test_cond['xT']
 
         with th.no_grad():
-            # Pass data into encoder
-            if args.multi_gpu_sampling:
-                with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
-                    with autocast(dtype=th.float32):
-                        emb_test_batch = vae.encode(test_batch).latent_dist.mode()
-                        emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
-            else:
-                with autocast(dtype=th.float32):
-                    emb_test_batch = vae.encode(test_batch).latent_dist.mode()
-                    emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
+        # Pass data into encoder
+            with autocast(dtype=th.float16):
+                emb_test_batch = vae.encode(test_batch).latent_dist.mode()
+                emb_test_xT = vae.encode(test_cond['xT']).latent_dist.mode()
 
-
-            if args.multi_gpu_sampling:
-                with th.cuda.device('cuda:0'):
-                    emb_sample, path, nfe = karras_sample(
-                        diffusion,
-                        model,
-                        emb_test_xT,
-                        emb_test_batch,
-                        steps=40,
-                        model_kwargs={'xT': emb_test_xT},
-                        clip_denoised=True,
-                        sampler='heun',
-                        sigma_min=args.sigma_min,
-                        sigma_max=args.sigma_max,
-                        guidance=1
-                    )
-                with th.cuda.device('cuda:1'):  # Move data to GPU(1) before encoding
-                    with autocast(dtype=th.float32):
-                        sample = vae.decode(emb_sample).sample
-            else:
                 emb_sample, path, nfe = karras_sample(
                     diffusion,
                     model,
@@ -285,14 +214,14 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
                     emb_test_batch,
                     steps=40,
                     model_kwargs={'xT': emb_test_xT},
-                    clip_denoised=True,
+                    clip_denoised=False,
                     sampler='heun',
                     sigma_min=args.sigma_min,
                     sigma_max=args.sigma_max,
                     guidance=1
                 )
-                with autocast(dtype=th.float32):
-                    sample = vae.decode(emb_sample).sample
+
+                sample = vae.decode(emb_sample).sample
 
         if mask[0] != -1 and mask is not None:
             sample = sample*mask
@@ -308,17 +237,6 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
         Function computes the f1 dice loss between a generated image (mask) and the reference image
         """
         # Ensure imputs are normalized to [0,1]
-        # if th.min(gen_img) <= 0. or th.max(gen_img) >= 1.:
-        #     print(f"gen_img range: min:{th.min(gen_img)}, max:{th.max(gen_img)}")
-        #     gen_img = (gen_img+1.)/2.
-        #     gen_img = gen_img.clamp(0,1)
-        #     assert th.min(gen_img) >= 0. and th.max(gen_img) <= 1.
-        # if th.min(ref_img) <= 0. or th.max(ref_img) >= 1.:
-        #     print(f"ref_img range: min:{th.min(ref_img)}, max:{th.max(ref_img)}")
-        #     ref_img = (ref_img+1.)/2.
-        #     ref_img = ref_img.clamp(0,1)
-        #     assert th.min(ref_img) >= 0. and th.max(ref_img) <= 1.
-
         gen_img = (gen_img+1.)/2.
         gen_img = gen_img.clamp(0,1)
         ref_img = (ref_img+1.)/2.
@@ -335,25 +253,14 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
         elif gen_img.shape[1] > 3:
             raise ValueError(f"Number of output channels must be either {1} or {3}.")
         
-        _gen_img = gen_img
-        _ref_img = ref_img
+
         gen_img = th.flatten(gen_img)
         ref_img = th.flatten(ref_img)
         dice = F1(gen_img, ref_img, num_classes=2)
         gen_img_bin = (gen_img >= 0.5).float()
         ref_img_bin = (ref_img >= 0.5).float()
-        _gen_img_bin = (_gen_img >= 0.5).float()
-        _ref_img_bin = (_ref_img >= 0.5).float() 
-        dice_tol = F1(gen_img_bin, ref_img_bin, num_classes=2)
 
-        grid_img = torchvision.utils.make_grid(gen_img, nrow=2, normalize=True, scale_each=True)
-        torchvision.utils.save_image(grid_img, f'tmp_imgs/gen_img_debug.pdf')
-        grid_img = torchvision.utils.make_grid(ref_img, nrow=2, normalize=True, scale_each=True)
-        torchvision.utils.save_image(grid_img, f'tmp_imgs/ref_img_debug.pdf')
-        grid_img = torchvision.utils.make_grid(gen_img_bin, nrow=2, normalize=True, scale_each=True)
-        torchvision.utils.save_image(grid_img, f'tmp_imgs/gen_img_bin_debug.pdf')
-        grid_img = torchvision.utils.make_grid(ref_img_bin, nrow=2, normalize=True, scale_each=True)
-        torchvision.utils.save_image(grid_img, f'tmp_imgs/ref_img_bin_debug.pdf')
+        dice_tol = F1(gen_img_bin, ref_img_bin, num_classes=2)
         
         # Compute accuracy 
         I = th.ones_like(ref_img)
@@ -385,11 +292,11 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
         batch_size = args.batch_size
 
     gathered_scores = {"mse":0, "dice":0, "dice_tol":0, "accuracy":0, "precision":0, "recall":0}
-    num_inter = num_samples//batch_size
 
-    for i in tqdm(range(1,(num_inter+1))):
+    i = 1
+    for test_batch, test_cond, _, mask in data:  
         # Generate samples from model to compute f1 score against and fid
-        sample, target, mask = _sample()
+        sample, target, mask = _sample(test_batch, test_cond, mask)
         scores = _compute_scores(sample, target)
         # update averages 
         gathered_scores["mse"] = ((i-1)/i)*gathered_scores["mse"] + scores["mse"]/i
@@ -398,7 +305,8 @@ def calculate_metrics(diffusion, model, vae, data, step, args, num_samples=1000)
         gathered_scores["accuracy"] = ((i-1)/i)*gathered_scores["accuracy"] + scores["accuracy"]/i
         gathered_scores["precision"] = ((i-1)/i)*gathered_scores["precision"] + scores["precision"]/i
         gathered_scores["recall"] = ((i-1)/i)*gathered_scores["recall"] + scores["recall"]/i
-    
+        i += 1
+
     logger.log("Current training step:", step)
     logger.log("mse:", gathered_scores["mse"])
     logger.log("dice:", gathered_scores["dice"])
@@ -506,20 +414,7 @@ def main(args):
     print('trainloop initialized')
     # Train model incrementally 
     while True:
-        if dist.get_world_size() >= 2 and args.multi_gpu_sampling:
-            logger.log("Training using split gpu sampling...")
-            model.train()
-            step, ema_rate = trainloop.run_loop()
-            # Compute model metrics
-            th.cuda.empty_cache()
-            model.eval()
-            training_sample(diffusion, model, vae, test_data, 5, step, args)
-            calculate_metrics(diffusion, model, vae, test_data, step, args)
-            trainloop.step += 1
-            # Training and metric computations scripts move models off devices 
-            vae.to(dist_util.dev())
-            model.to(dist_util.dev())
-        elif dist.get_world_size() == 1 and not args.multi_gpu_sampling:
+        if dist.get_world_size() == 1 and not args.multi_gpu_sampling:
             logger.log("Training without split gpu sampling...")
             model.train()
             step, ema_rate = trainloop.run_loop()

@@ -1,22 +1,8 @@
-#!/bin/bash
-#SBATCH --job-name=ddbm_vae
-#SBATCH --nodes=1
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=16GB
-#SBATCH --signal=B:USR1@30
-#SBATCH --time=48:00:00
-#SBATCH --output=%x.out
-#SBATCH --error=%x.err
-
-# Launch Python script in background
 echo "Job stared..."
 
-source activate ddbm
+source ./args.sh $DATASET_NAME fives $PRED vp $NGPU 1
 
-source ./args.sh $DATASET_NAME vae_fives_patches $PRED vp $NGPU 1
-
-NCCL_P2P_LEVEL=NVL mpiexec --use-hwthread-cpus --oversubscribe -n $NGPU python train_ddbm_incremental.py \
+NCCL_P2P_LEVEL=NVL mpiexec --use-hwthread-cpus --oversubscribe -n $NGPU python eval_ddbm.py \
     --work_dir=$WORK_DIR --exp=$EXP --data_dir=$DATA_DIR --dataset=$DATASET \
     --image_size $EMB_SIZE --in_channels $EMB_CHANNELS --data_image_size $DATA_IMG_SIZE --data_image_channels $DATA_IMG_CHANNELS \
     --attention_resolutions $ATTN --class_cond False --use_scale_shift_norm True \
@@ -33,22 +19,4 @@ NCCL_P2P_LEVEL=NVL mpiexec --use-hwthread-cpus --oversubscribe -n $NGPU python t
     --log_interval=$LOG_INTERVAL --test_interval=$TEST_INTERVAL --save_interval=$SAVE_INTERVAL \
     --debug False \
     ${CKPT:+ --resume_checkpoint="${CKPT}"} \
-    --dice_weight=$DICE_WEIGHT --dice_tol=$DICE_TOL \
-    --eqv $EQV --eqv_reg $EQV_REG &
-
-# Capture the PID of the Python process
-PID=$!
-echo "Captured PID: $PID"
-
-# Define the cleanup function to handle termination signals
-cleanup() {
-    # Send signal USR1 to Python script with a delay of 180 seconds
-    echo "Received termination signal, handling it gracefully..."
-    kill -SIGUSR1 $PID
-}
-
-# Trap termination signals and call the cleanup function
-trap cleanup SIGUSR1
-
-# Wait for Python process to finish
-wait $PID
+    --dice_weight=$DICE_WEIGHT --dice_tol=$DICE_TOL &

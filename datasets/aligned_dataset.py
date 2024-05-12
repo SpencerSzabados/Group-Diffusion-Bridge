@@ -112,7 +112,7 @@ class EdgesDataset(torch.utils.data.Dataset):
     During test time, you need to prepare a directory '/path/to/data/test'.
     """
 
-    def __init__(self, dataroot, train=True, img_size=256, num_channels=3, random_crop=False, random_flip=True, rotate=False, angle=0):
+    def __init__(self, dataroot, train=True, img_size=256, num_channels=3, random_crop=False, random_flip=False, rotate=False, angle=0):
         """Initialize this dataset class.
         Parameters:
             opt (Option class) -- stores all the experiment flags; needs to be a subclass of BaseOptions

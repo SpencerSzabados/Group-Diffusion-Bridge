@@ -38,7 +38,7 @@ class KarrasDenoiser:
         weight_schedule="karras",
         pred_mode='both',
         loss_norm="lpips",
-        clip_denoised=True
+        clip_denoised=False
     ):
         self.sigma_data = sigma_data
         self.sigma_max = sigma_max 
@@ -149,15 +149,9 @@ class KarrasDenoiser:
             return c_skip, c_out, c_in
         
 
-    def training_bridge_losses(self, vae, model, x_start, sigmas, model_kwargs=None, noise=None, mask=None, dice_weight=0, dice_tol=0):
-        
+    def training_bridge_losses(self, vae, model, x_start, sigmas, model_kwargs=None, noise=None, eqv='Z2', eqv_reg="REG", mask=None, dice_weight=0, dice_tol=0, target_model=None):
         assert model_kwargs is not None
-
-        grid_img = torchvision.utils.make_grid(x_start, nrow=1, normalize=True, scale_each=True)
-        torchvision.utils.save_image(grid_img, f'tmp_imgs/x_start_debug.pdf')
-        grid_img = torchvision.utils.make_grid(model_kwargs['xT'], nrow=1, normalize=True, scale_each=True)
-        torchvision.utils.save_image(grid_img, f'tmp_imgs/model_kwargs_debug.pdf')
-
+        
         with th.no_grad():
             # Encode inputs 
             x_start_ = x_start
@@ -205,21 +199,44 @@ class KarrasDenoiser:
 
         model_output, denoised = self.denoise(model, x_t, sigmas, **model_kwargs)
 
-        if mask[0] != -1 and mask is not None:
-            model_output = model_output*mask
-            denoised = denoised*mask
+        target_model_output = None
+        if eqv_reg == 'REG':
+            if target_model is not None:
+                with th.no_grad():
+                    aug_op, aug_op_inv = get_eqv_reg_pair(eqv)
+                    # 1) aug x_t according to eqv_reg
+                    aug_x_t = aug_op(x_t)
+                    # 2) compute denoised of aug_x_t using target model
+                    target_model.eval()
+                    aug_model_output, aug_denoised = self.denoise(target_model, aug_x_t, sigmas, **model_kwargs)
+                    # 3) apply reverse aug over aug_denoised
+                    # inv_aug_denoised = aug_op_inv(aug_denoised.detach())
+                    target_model_output = aug_op_inv(aug_model_output.detach())
+        elif eqv_reg == "FA":
+            with th.no_grad():
+                
+        else:
+            raise NotImplementedError
 
         # Decode model outputs
         # TODO: This code is commented out to perform gradient updates of diffusion model
         #       within the latent space only.
-        with autocast(dtype=th.float16):
-            model_output = vae.decode(model_output).sample
-            denoised = vae.decode(denoised).sample
-            x_start = x_start_
-        # Average all channels for computing loss 
-        model_output = model_output.mean(dim=1, keepdim=True)
-        denoised = denoised.mean(dim=1, keepdim=True)
-        x_start = x_start.mean(dim=1, keepdim=True)            
+        # with autocast(dtype=th.float16):
+        #     model_output = vae.decode(model_output).sample
+        #     denoised = vae.decode(denoised).sample
+        #     x_start = x_start_
+        #     target_model_output = vae.decode(target_model_output).sample
+        # # Average all channels for computing loss 
+        # model_output = model_output.mean(dim=1, keepdim=True)
+        # denoised = denoised.mean(dim=1, keepdim=True)
+        # x_start = x_start.mean(dim=1, keepdim=True)   
+        # target_model_output = target_model_output.mean(dim=1, keepdim=True)
+                
+        if mask[0] != -1 and mask is not None:
+            model_output = model_output*mask
+            denoised = denoised*mask
+            if target_model_output is not None:
+                target_model_output = mask*target_model_output       
 
         # Compute DICE regularization loss term 
         dice_loss = 0
@@ -230,8 +247,14 @@ class KarrasDenoiser:
 
         weights = self.get_weightings(sigmas)
         weights = append_dims((weights), dims)
-        terms["xs_mse"] = mean_flat((denoised - x_start) ** 2)
-        terms["mse"] = mean_flat(weights * (denoised - x_start) ** 2)
+        terms["xs_mse"] = mean_flat((denoised-x_start)**2)
+        terms["mse"] = mean_flat(weights*(denoised-x_start)**2)
+
+        if target_model_output is not None:
+            terms["mse_inv"] = mean_flat(weights*(model_output-target_model_output)**2)
+        else:
+            terms["mse_inv"] = 0
+
         if dice_weight > 0:
             terms["xs_dice"] = dice_loss
             terms["dice"] = mean_flat(weights)*dice_loss
@@ -243,9 +266,9 @@ class KarrasDenoiser:
         #       cannot be computed in the vae latent space. Currently I am just setting
         #       "dice_weight = 0" in arguments to avoid removing the code.
         if "vb" in terms:
-            terms["loss"] = terms['mse'] + terms["vb"] + dice_weight*terms["dice"]
+            terms["loss"] = terms['mse'] + terms["mse_inv"] + terms["vb"] + dice_weight*terms["dice"]
         else:
-            terms["loss"] = terms['mse'] + dice_weight*terms["dice"]
+            terms["loss"] = terms['mse'] + terms["mse_inv"] + dice_weight*terms["dice"]
         return terms
     
 
@@ -260,13 +283,64 @@ class KarrasDenoiser:
         return model_output, denoised
 
 
+
+def get_eqv_reg_pair(eqv_reg):
+        if eqv_reg == 'H':
+            @th.no_grad()
+            def aug_op(x):
+                return th.flip(x, [-1])
+
+            @th.no_grad()
+            def aug_op_inv(x):
+                return th.flip(x, [-1])
+
+        elif eqv_reg == 'V':
+            @th.no_grad()
+            def aug_op(x):
+                return th.flip(x, [-2])
+            
+            
+            @th.no_grad()
+            def aug_op_inv(x):
+                return th.flip(x, [-2])
+            
+        elif eqv_reg == 'C4':
+            k = np.random.randint(1,4)
+
+            @th.no_grad()
+            def aug_op(x):
+                return th.rot90(x, k = k, dims = [-1, -2])
+            
+            @th.no_grad()
+            def aug_op_inv(x):
+                return th.rot90(x, k = k, dims = [-2, -1])
+            
+        elif eqv_reg == 'D4':
+            k = np.random.randint(0, 4)
+            v_flip = np.random.randint(0, 2)
+
+            @th.no_grad()
+            def aug_op(x):
+                return th.rot90(th.flip(x, [-2]) if v_flip else x, k = k, dims = [-1, -2])
+            
+            @th.no_grad()
+            def aug_op_inv(x):
+                x_ = th.rot90(x, k = k, dims = [-2, -1])
+                return th.flip(x_, [-2]) if v_flip else x_
+
+        else:
+            raise NotImplementedError(f"eqv_reg: {eqv_reg} is not currently supported.")
+        
+        return aug_op, aug_op_inv
+
+
 def karras_sample(
     diffusion,
     model,
     x_T,
     x_0,
     steps,
-    clip_denoised=True,
+    clip_denoised=False, # Changed from True
     progress=False,
     callback=None,
     model_kwargs=None,
@@ -291,9 +365,6 @@ def karras_sample(
         )
     def denoiser(x_t, sigma, x_T=None):
         _, denoised = diffusion.denoise(model, x_t, sigma, **model_kwargs)
-        
-        if clip_denoised:
-            denoised = denoised.clamp(-1, 1)
                 
         return denoised
     
@@ -307,7 +378,7 @@ def karras_sample(
         **sampler_args,
     )
 
-    return x_0.clamp(-1, 1), [x.clamp(-1, 1) for x in path], nfe
+    return x_0, [x for x in path], nfe
 
 
 def get_sigmas_karras(n, sigma_min, sigma_max, rho=7.0, device="cpu"):
@@ -364,6 +435,7 @@ def get_d_vp(x, denoised, x_T, std_t,logsnr_t, logsnr_T, logs_t, logs_T, s_t_der
         return d, gt2
     else:
         return d
+
 
 @th.no_grad()
 def sample_heun(

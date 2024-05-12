@@ -15,10 +15,12 @@ NUM_RES_BLOCKS=2
 USE_16FP=True
 ATTN_TYPE=flash
 LOG_INTERVAL=500
-TEST_INTERVAL=20000
-SAVE_INTERVAL=20000
+TEST_INTERVAL=2500
+SAVE_INTERVAL=2500
 IN_CHANNELS=3
 OUT_CHANNELS=3
+EQV=Z2
+EQV_REG=None
 
 
 # Arguments
@@ -82,7 +84,7 @@ fi
 if  [[ $DATA_IMG_SIZE == 2048 ]]; then
     BS=1
 elif  [[ $DATA_IMG_SIZE == 512 ]]; then
-    BS=2
+    BS=8
 elif  [[ $DATA_IMG_SIZE == 256 ]]; then
     BS=16
 elif  [[ $DATA_IMG_SIZE == 128 ]]; then

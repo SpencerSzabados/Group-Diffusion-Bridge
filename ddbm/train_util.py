@@ -50,6 +50,8 @@ class TrainLoop:
         resume_checkpoint,
         workdir,
         use_fp16=False,
+        eqv='Z2',
+        eqv_reg=None,
         fp16_scale_growth=1e-3,
         schedule_sampler=None,
         weight_decay=0.0,
@@ -62,6 +64,7 @@ class TrainLoop:
     ):
         self.vae = vae
         self.model = model
+        self.target_model = None
         self.diffusion = diffusion
         self.data = train_data
         self.test_data = test_data
@@ -82,6 +85,8 @@ class TrainLoop:
         self.resume_checkpoint = resume_checkpoint
         self.use_fp16 = use_fp16
         self.fp16_scale_growth = fp16_scale_growth
+        self.eqv = eqv
+        self.eqv_reg = eqv_reg
         self.schedule_sampler = schedule_sampler or UniformSampler(diffusion)
         self.total_training_steps = total_training_steps
         self.weight_decay = weight_decay
@@ -139,11 +144,22 @@ class TrainLoop:
             self.ddp_model = self.model
 
         self.step = self.resume_step
-
         self.generator = get_generator(sample_kwargs['generator'], self.batch_size, 42)
         self.sample_kwargs = sample_kwargs
-
         self.augment = augment_pipe
+
+        if self.eqv_reg == 'REG':
+            self.target_model = copy.deepcopy(self.model)
+            self.target_model.requires_grad_(False)
+            self.target_model.train()
+
+            # self.target_model_master_params = list(self.target_model.parameters())
+            self.target_model_param_groups_and_shapes = get_param_groups_and_shapes(
+                self.target_model.named_parameters()
+            )
+            self.target_model_master_params = make_master_params(
+                self.target_model_param_groups_and_shapes
+            )
 
         logger.log("Finished initlizaing TrainLoop.")
         # signal.signal(signal.SIGUSR1, self._sig_handler)
@@ -285,6 +301,8 @@ class TrainLoop:
         if took_step:
             self.step += 1
             self._update_ema()
+            if self.target_model is not None:
+                self._update_target_ema()
         self._anneal_lr()
         self.log_step()
         return took_step
@@ -318,8 +336,11 @@ class TrainLoop:
                 model_kwargs=micro_cond,
                 mask=mask,
                 dice_weight=dice_weight,
-                dice_tol=dice_tol
-                )
+                dice_tol=dice_tol,
+                eqv=self.eqv,
+                eqv_reg=self.eqv_reg,
+                target_model=self.target_model,
+            )
 
             if last_batch or not self.use_ddp:
                 losses = compute_losses()
@@ -338,6 +359,25 @@ class TrainLoop:
             )
             if train:
                 self.mp_trainer.backward(loss)
+
+    def _update_target_ema(self):
+        with th.no_grad():
+            if self.use_fp16: # TODO: combine into one case.
+                update_ema(
+                    self.target_model_master_params,
+                    self.mp_trainer.master_params,
+                    rate=self.target_ema
+                )
+                master_params_to_model_params(
+                    self.target_model_param_groups_and_shapes,
+                    self.target_model_master_params,
+                )
+            else: 
+                update_ema(
+                    list(self.target_model.parameters()),
+                    self.mp_trainer.master_params,
+                    rate=self.target_ema
+                )
 
     def _update_ema(self):
         for rate, params in zip(self.ema_rate, self.ema_params):

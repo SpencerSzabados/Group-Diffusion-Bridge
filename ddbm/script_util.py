@@ -30,7 +30,7 @@ def cm_train_defaults():
 def sample_defaults():
     return dict(
         generator="determ",
-        clip_denoised=True,
+        clip_denoised=False,
         sampler="euler",
         s_churn=0.0,
         s_tmin=0.002,
