@@ -1,9 +1,9 @@
-# Denoising Diffusion Bridge Models
+# Diffusion Models with Group Equivariance
 
 Official Implementation of [Diffusion Models with Group Equivariance](https://openreview.net/forum?id=65XylEuDLB)(link to be updated). This work is a follow up to [Structure Preserving Diffusion Models](https://arxiv.org/abs/2402.19369).
 
 <p align="center">
-  <img src="assets/teaser.png" width="100%"/>
+  <img src="assets/teaser.png" width="60%"/>
 </p>
 
 ## Abstract
