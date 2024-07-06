@@ -18,6 +18,8 @@ dist/
 .pytest_cache/
 
 slurm_output/
+*.err
+*.out
 
 # Other
 *.DS_Store
