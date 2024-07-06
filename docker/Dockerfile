@@ -23,4 +23,9 @@ RUN pip3 install --no-cache-dir torch torchvision --index-url https://download.p
 RUN pip3 install --no-cache-dir flash-attn==0.2.8
 RUN pip3 install blobfile scipy piq tqdm numpy pillow clean-fid==0.1.35
 
+# Install project 
+WORKDIR /home/
+RUN git clone https://github.com/SpencerSzabados/Group-Diffusion-Bridge.git
+WORKDIR /home/Group-Diffusion-Bridge
+
 RUN ln -s /usr/bin/python3 /usr/bin/python
