@@ -25,13 +25,14 @@ if [[ $DATASET_NAME == "e2h" ]]; then
     EXP="e2h${IMG_SIZE}_${NUM_CH}d"
     SAVE_ITER=100000
 elif [[ $DATASET_NAME == "fives" ]]; then
-    DATA_DIR=/home/datasets/fives64/
+    DATA_DIR=/share/yaoliang/datasets/fives_L64/
     DATASET=fives
     IMG_SIZE=64
     NUM_CH=192
     NUM_RES_BLOCKS=3
     EXP="h2e_rot90_wt_${DATASET}_${IMG_SIZE}_${NUM_CH}ch_${NUM_RES_BLOCKS}b"
     SAVE_ITER=5000
+
 elif [[ $DATASET_NAME == "diode" ]]; then
     DATA_DIR=YOUR_DATASET_PATH
     DATASET=diode
@@ -74,7 +75,7 @@ if  [[ $IMG_SIZE == 256 ]]; then
 elif  [[ $IMG_SIZE == 128 ]]; then
     BS=16
 elif  [[ $IMG_SIZE == 64 ]]; then
-    BS=16
+    BS=64
 else
     echo "Not supported"
     exit 1

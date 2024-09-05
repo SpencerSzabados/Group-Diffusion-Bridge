@@ -13,17 +13,78 @@ import re
 import random 
 import numpy as np 
 from PIL import Image 
+import cv2
 from tqdm import tqdm
 
-# def load_data(data_dir):
-#     """
-#     Load images into npy array for easier management and loading.
-#     """
     
+def remove_water_mark(data_dir, processed_dir):
+    """
+    Preprocess data to remove white water mark in boundary of image.
+    """
+    print("Removing image water mark...")
+    # Load image dataset from data_dir 
+    # Assuming 'dataset' is a 3D array with shape (height, width, channels)
+    img_files = [f for f in os.listdir(os.path.join(data_dir,"images")) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+
+    mask = Image.new("RGB", (100,150), color="black")
+    for file in tqdm(img_files):
+        img = Image.open(data_dir+"images/"+file)
+        img.paste(mask, (0,0))
+        img.save(os.path.join(processed_dir+"images/", f"{file}"))
+
+def convert_grey_scale(data_dir, processed_dir):
+    """
+    Preprocess data and convert it to grey scale images using weighted average of colour channels.
+        Y = 0.3*R + 0.59*G + 0.11*B
+    This is the default formula used within the PIL image conversion code.
+    """
+    print("Converting images to grey scale...")
+    # Load image dataset from data_dir 
+    # Assuming 'dataset' is a 3D array with shape (height, width, channels)
+    img_files = [f for f in os.listdir(os.path.join(data_dir,"images")) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+
+    for file in tqdm(img_files):
+        img_grey = Image.open(data_dir+"images/"+file).convert('L')
+        img_grey.save(os.path.join(processed_dir+"images/", f"{file}"))
+
+
+def CLAHE(data_dir, processed_dir, threshold=0, grid_size=8):
+    """
+    Apply constrast limited adaptive histogram equilization to images.
+    """
+    print("Contrast normalizing images...")
+    # Load image dataset from data_dir 
+    # Assuming 'dataset' is a 3D array with shape (height, width, channels)
+    img_files = [f for f in os.listdir(os.path.join(data_dir,"images")) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+
+    tranform = cv2.createCLAHE(clipLimit=threshold, tileGridSize=(grid_size, grid_size))
+
+    for file in tqdm(img_files):
+        img_grey = cv2.imread(os.path.join(os.path.join(data_dir,"images"), file), cv2.COLOR_BGR2GRAY)
+        img_grey = tranform.apply(img_grey)
+        cv2.imwrite(os.path.join(processed_dir+"images/", f"{file}"), img_grey)
+
+
+def gamma_correction(data_dir, processed_dir, gamma=1):
+    """
+    Apply gamma correction to batch of images
+    """
+    print("Gamma correcting images...")
+    # Load image dataset from data_dir 
+    # Assuming 'dataset' is a 3D array with shape (height, width, channels)
+    img_files = [f for f in os.listdir(os.path.join(data_dir,"images")) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+
+    for file in tqdm(img_files):
+        img_grey = cv2.imread(os.path.join(os.path.join(data_dir,"images"), file))
+        img_grey = (img_grey/255.).astype(np.float32)
+        img_grey = np.power(img_grey, 1./gamma)
+        img_grey = (img_grey*255).astype(np.uint8)
+        cv2.imwrite(os.path.join(processed_dir+"images/", f"{file}"), img_grey)
+
 
 def scale_data(data_dir, processed_dir, resolution=64):
     """
-    Scale images to selected resolution.
+    Scale images to selected resolution and glue mask and image together.
     """
     print("Scaling images to set resolution...")
     # Load image dataset from data_dir 
@@ -45,12 +106,12 @@ def scale_data(data_dir, processed_dir, resolution=64):
         mask = mask.resize((resolution, resolution), Image.LANCZOS)
         # Glue images together 
         combined_image = Image.new("RGB", (2*resolution,resolution))
-        combined_image.paste(image, (resolution,0))
-        combined_image.paste(mask, (0,0))
+        combined_image.paste(image, (0,0))
+        combined_image.paste(mask, (resolution,0))
 
         # Save the result to the output directory
         file_name = str(index)+"_"+label
-        combined_image.save(os.path.join(processed_dir+"train", f"{file_name}"))
+        combined_image.save(os.path.join(processed_dir, f"{file_name}"))
     print("Finished.")
 
 
@@ -124,16 +185,65 @@ def random_crop(data_dir, processed_dir, resolution=64, aug_mul=1):
     print("Finished.")
 
 
+def grid_crop(data_dir, processed_dir, resolution=64):
+    """
+    Script slices image into set of patches of the specifed resolution. The resulting patches 
+    are stiched to their corresponding patch from the image mask.
+    """
+    print("Slicing images into grids...")
+    img_files = [f for f in os.listdir(os.path.join(data_dir,"raw_images")) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+
+    num_images = len(img_files)
+    w, h = Image.open(data_dir+"raw_images/"+img_files[0]).size
+    assert (w%resolution == 0) and (h%resolution == 0)
+
+    for file in tqdm(img_files):
+        # Generate names for files 
+        tokens = re.split("_", file)
+        index = int(tokens[0])
+        label = tokens[1]
+
+        image = Image.open(data_dir+"raw_images/"+file)
+        mask = Image.open(data_dir+"raw_masks/"+file)
+
+        w, h = image.size
+        for i in range(w//resolution):
+            # Calculate cropping parameters to randomly crop image
+            for j in range(h//resolution):
+                left = i*resolution
+                top = j*resolution
+                right = left+resolution
+                bottom = top+resolution
+
+                # Perform crop
+                img_cropped = image.crop((left, top, right, bottom))
+                mask_cropped = mask.crop((left, top, right, bottom))
+
+                # Glue images together 
+                combined_image = Image.new("RGB", (2*resolution,resolution))
+                combined_image.paste(mask_cropped, (resolution,0))
+                combined_image.paste(img_cropped, (0,0))
+                
+                # Save the result to the output directory
+                file_name = str(index)+"_"+str(i)+str(j)+"_"+label
+                combined_image.save(os.path.join(processed_dir, f"{file_name}"))
+                img_cropped.save(os.path.join(processed_dir+"images", f"{file_name}"))
+                mask_cropped.save(os.path.join(processed_dir+"masks", f"{file_name}"))
+    print("Finished.")
+
+
 def main():
     # data paramters
-    data_dir = "/home/sszabados/datasets/fives/train/"
-    temp_dir = data_dir+"temp/"
-    processed_dir = "/home/sszabados/datasets/fives64/"
+    data_dir = "/share/yaoliang/datasets/fives/test/"
+    temp_dir = "/share/yaoliang/datasets/temp/val/"
+    processed_dir = "/share/yaoliang/datasets/fives_L64/val/"
 
-    # load_data(data_dir, processed_dir)
-    scale_data(data_dir, processed_dir, resolution=64)
-    # inscribed_crop(data_dir, temp_dir)
-    # random_crop(temp_dir, processed_dir, resolution=64, aug_mul=10)
+    remove_water_mark(data_dir, temp_dir)
+    convert_grey_scale(temp_dir, temp_dir)
+    CLAHE(temp_dir, temp_dir, threshold=1.8, grid_size=8)
+    gamma_correction(temp_dir, temp_dir, gamma=1.2)
+    scale_data(temp_dir, processed_dir, resolution=64)
+    # grid_crop(processed_dir, processed_dir, resolution=512)
 
 
 if __name__ == "__main__":
