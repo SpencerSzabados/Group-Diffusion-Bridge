@@ -13,17 +13,18 @@ import torch as th
 import torchvision
 from torchvision import transforms
 from PIL import Image
+from tqdm import tqdm
 
 
 # Data paramters 
 h5_data_dir = "/home/sszabados/datasets/lysto/"
-h5_dataset_name = "training.h5"
+h5_dataset_name = "test.h5"
 label_dir = "/home/sszabados/datasets/lysto/"
-data_dir = "/home/sszabados/datasets/lysto32_random_crop_ddbm/"
+data_dir = "/home/sszabados/datasets/lysto64_random_crop_ddbm/val/"
 labels_name = "training_labels.csv"
-npy_dataset_name = "train_images.npy" 
-npy_labels_name = "train_labels.npy"
-npy_organ_names = "train_organs.npy"
+npy_dataset_name = "test_images.npy" 
+npy_labels_name = "test_labels.npy"
+npy_organ_name = "test_organs.npy"
 
  
 def convert_h5_npy():
@@ -58,7 +59,7 @@ def convert_h5_npy():
     # Save data
     np.save(data_dir+npy_dataset_name, npy_images)
     np.save(data_dir+npy_labels_name, npy_labels)
-    np.save(data_dir+npy_organ_names, num_npy_organs)
+    np.save(data_dir+npy_organ_name, num_npy_organs)
     
 
 def gen_lysto_npy(resolution=299):
@@ -67,17 +68,18 @@ def gen_lysto_npy(resolution=299):
     """
     # Load the .npy dataset
     # Assuming 'dataset' is a 4D array with shape (num_images, height, width, channels)
-    org_dataset = np.load(str(data_dir)+str(npy_dataset_name))
+    org_dataset = np.load(str(h5_data_dir)+str(npy_dataset_name))
+    org_labels = np.load(str(h5_data_dir)+str(npy_organ_name))
     # Create an empty array for downscaled images
     scaled_dataset = np.empty((org_dataset.shape[0], resolution, resolution, org_dataset.shape[3]), dtype=org_dataset.dtype)
 
-    for i in range(org_dataset.shape[0]):
+    for i in tqdm(range(org_dataset.shape[0])):
         image = Image.fromarray(org_dataset[i])
         scaled_image = image.resize((resolution, resolution), Image.LANCZOS)
         scaled_dataset[i] = np.array(scaled_image)
 
     np.save(data_dir+npy_dataset_name, scaled_dataset)  
-
+    np.save(data_dir+npy_organ_name, org_labels)
 
 def gen_lysto_center_crop_npy(resolution=299):
     """
@@ -157,16 +159,11 @@ def gen_ddbm_lysto_random_crop_npy(resolution=64, aug_mul=1, scale=0.5, sigma=10
     # Load the .npy dataset
     # Assuming 'dataset' is a 4D array with shape (num_images, height, width, channels)
     org_dataset = np.load(str(data_dir)+str(npy_dataset_name))
-    labels = np.load(str(data_dir)+str(npy_organ_names))
-    
-    # Load the .npy dataset
-    # Assuming 'dataset' is a 4D array with shape (num_images, height, width, channels)
-    org_dataset = np.load(data_dir+npy_dataset_name)
-    org_labels = np.load(label_dir+npy_labels_name)
+    org_labels = np.load(str(data_dir)+str(npy_organ_name))
     # Create an empty array for downscaled images
     scaled_dataset = np.empty((org_dataset.shape[0]*aug_mul, resolution, 2*resolution, org_dataset.shape[3]), dtype=org_dataset.dtype)
     scaled_labels = np.repeat(org_labels, aug_mul)
-    for i in range(org_dataset.shape[0]):
+    for i in tqdm(range(org_dataset.shape[0])):
         for _ in range(0,aug_mul):
             image = Image.fromarray(org_dataset[i])
             # Calculate cropping parameters to randomly crop image
@@ -202,7 +199,7 @@ def gen_ddbm_lysto_random_crop_npy(resolution=64, aug_mul=1, scale=0.5, sigma=10
             # img_resized = img_cropped.resize((resolution, resolution), Image.LANCZOS)
             scaled_dataset[i] = np.array(combined_image)
 
-    np.save(data_dir+npy_labels_name, scaled_labels)
+    np.save(data_dir+npy_organ_name, scaled_labels)
     np.save(data_dir+npy_dataset_name, scaled_dataset) 
 
 
@@ -210,7 +207,7 @@ def convert_npy_JPG():
     # Load the .npy dataset
     # Assuming 'dataset' is a 4D array with shape (num_images, height, width, channels)
     org_dataset = np.load(str(data_dir)+str(npy_dataset_name))
-    labels = np.load(str(data_dir)+str(npy_organ_names))
+    labels = np.load(str(data_dir)+str(npy_organ_name))
     # Create an empty array for downscaled images
     for i in range(org_dataset.shape[0]):
         image = Image.fromarray(org_dataset[i])
@@ -221,11 +218,11 @@ def convert_npy_PNG():
     # Load the .npy dataset
     # Assuming 'dataset' is a 4D array with shape (num_images, height, width, channels)
     org_dataset = np.load(str(data_dir)+str(npy_dataset_name))
-    labels = np.load(str(data_dir)+str(npy_organ_names))
+    labels = np.load(str(data_dir)+str(npy_organ_name))
     # Create an empty array for downscaled images
-    for i in range(org_dataset.shape[0]):
+    for i in tqdm(range(org_dataset.shape[0])):
         image = Image.fromarray(org_dataset[i])
-        image.save(os.path.join(data_dir+"train_images", f"{labels[i]}_{i}.PNG"), format='PNG')
+        image.save(os.path.join(data_dir, f"{labels[i]}_{i}.PNG"), format='PNG')
 
 
 def gen_lysto_JPG(resolution=299):
@@ -237,7 +234,7 @@ def gen_lysto_JPG(resolution=299):
     # Load the .npy dataset
     # Assuming 'dataset' is a 4D array with shape (num_images, height, width, channels)
     org_dataset = np.load(str(data_dir)+str(npy_dataset_name))
-    labels = np.load(str(data_dir)+str(npy_organ_names))
+    labels = np.load(str(data_dir)+str(npy_organ_name))
    
     for i in range(org_dataset.shape[0]):
         image = Image.fromarray(org_dataset[i])
@@ -253,7 +250,7 @@ def gen_lysto_center_crop_JPG(resolution=299):
     # Load the .npy dataset
     # Assuming 'dataset' is a 4D array with shape (num_images, height, width, channels)
     org_dataset = np.load(str(data_dir)+str(npy_dataset_name))
-    labels = np.load(str(data_dir)+str(npy_organ_names))
+    labels = np.load(str(data_dir)+str(npy_organ_name))
     # Create an empty array for downscaled images
     for i in range(org_dataset.shape[0]):
         image = Image.fromarray(org_dataset[i])
@@ -282,7 +279,7 @@ def gen_lysto_random_crop_JPG(resolution=299, aug_mul=0):
     # Load the .npy dataset
     # Assuming 'dataset' is a 4D array with shape (num_images, height, width, channels)
     org_dataset = np.load(str(data_dir)+str(npy_dataset_name))
-    labels = np.load(str(data_dir)+str(npy_organ_names))
+    labels = np.load(str(data_dir)+str(npy_organ_name))
     
     for i in range(org_dataset.shape[0]):
         for j in range(0,aug_mul):
@@ -310,15 +307,27 @@ def gen_lysto_random_crop_JPG(resolution=299, aug_mul=0):
 def gen_ddbm_lysto_right_crop(resolution=64):
     # Load image dataset from data_dir 
     # Assuming 'dataset' is a 3D array with shape (height, width, channels)
-    files = [f for f in os.listdir(data_dir+"train_images/") if f.lower().endswith(('.jpg', '.jpeg','.png'))]
+    files = [f for f in os.listdir(data_dir) if f.lower().endswith(('.jpg', '.jpeg','.png'))]
     num_images = len(files)
-    print(str(num_images)+", "+str(np.array(Image.open(data_dir+"train_images/"+files[0])).shape))
 
-    for file in files:
-        image = Image.open(data_dir+"train_images/"+file)
+    for file in tqdm(files):
+        image = Image.open(data_dir+file)
         cropped_img = image.crop((resolution, 0, 2*resolution, resolution))
         # Save the result to the output directory
-        cropped_img.save(os.path.join(data_dir+"fid_images", f"{file}"), format='PNG')
+        cropped_img.save(os.path.join(data_dir+"B", f"{file}"), format='PNG')
+
+
+def gen_ddbm_lysto_left_crop(resolution=64):
+    # Load image dataset from data_dir 
+    # Assuming 'dataset' is a 3D array with shape (height, width, channels)
+    files = [f for f in os.listdir(data_dir) if f.lower().endswith(('.jpg', '.jpeg','.png'))]
+    num_images = len(files)
+
+    for file in tqdm(files):
+        image = Image.open(data_dir+file)
+        cropped_img = image.crop((0, 0, resolution, resolution))
+        # Save the result to the output directory
+        cropped_img.save(os.path.join(data_dir+"A", f"{file}"), format='PNG')
 
 
 def sample_lysto(num_samples=10, num_classes=3):
@@ -356,9 +365,10 @@ def sample_lysto(num_samples=10, num_classes=3):
 
 if __name__=="__main__":
     # convert_h5_npy()
-    # gen_lysto_npy(resolution=128)
-    # gen_ddbm_lysto_random_crop_npy(resolution=32, aug_mul=1, scale=0.25, sigma=1)
+    gen_lysto_npy(resolution=128)
+    gen_ddbm_lysto_random_crop_npy(resolution=64, aug_mul=1, scale=0.25, sigma=0)
     # # convert_npy_JPG()
-    # convert_npy_PNG()
-    gen_ddbm_lysto_right_crop(resolution=32)
+    convert_npy_PNG()
+    gen_ddbm_lysto_right_crop(resolution=64)
+    gen_ddbm_lysto_left_crop(resolution=64)
 
