@@ -3,7 +3,7 @@
 #
 # Date  : 2024-04-04
 #
-# Note, setup.py is not longer supported by setuptools > v58.2
+# Note, setup.py is not longer supported by setuptools > v58.2?
 
 FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 

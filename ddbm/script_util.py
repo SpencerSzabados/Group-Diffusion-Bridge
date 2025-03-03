@@ -75,6 +75,8 @@ def model_and_diffusion_defaults():
         condition_mode=None,
         pred_mode='ve',
         weight_schedule="karras",
+        g_equiv=False,
+        g_output=""
     )
     return res
 
@@ -108,6 +110,8 @@ def create_model_and_diffusion(
     beta_min=0.1,
     cov_xy=0.,
     unet_type='adm',
+    g_equiv=False,
+    g_output=""
 ):
     model = create_model(
         image_size,
@@ -130,6 +134,8 @@ def create_model_and_diffusion(
         use_new_attention_order=use_new_attention_order,
         attention_type=attention_type,
         condition_mode=condition_mode,
+        g_equiv=g_equiv,
+        g_output=g_output
     )
     diffusion = KarrasDenoiser(
         sigma_data=sigma_data,
@@ -166,6 +172,8 @@ def create_model(
     use_new_attention_order=False,
     attention_type='flash',
     condition_mode=None,
+    g_equiv=False,
+    g_output=""
 ):
     if channel_mult == "":
         if image_size == 512:
@@ -208,6 +216,8 @@ def create_model(
             use_new_attention_order=use_new_attention_order,
             attention_type=attention_type,
             condition_mode=condition_mode,
+            g_equiv=g_equiv,
+            g_output=g_output
         )
     elif unet_type == 'edm':
         return SongUNet(

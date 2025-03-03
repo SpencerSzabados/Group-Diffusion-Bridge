@@ -9,7 +9,6 @@ import enum
 import math
 import numpy as np
 import torch as th
-
 from .losses import normal_kl, discretized_gaussian_log_likelihood
 from .nn import mean_flat
 

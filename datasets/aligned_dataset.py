@@ -5,13 +5,11 @@ import numpy as np
 import torchvision.transforms as transforms
 from .image_folder import make_dataset
 from PIL import Image
-
 import torchvision
 import blobfile as bf
 
-from glob import glob
 
-def get_params(size, resize_size, crop_size, angle):
+def get_params(size, resize_size, crop_size, angle=0):
     w, h = size
     new_h = h
     new_w = w
@@ -27,8 +25,9 @@ def get_params(size, resize_size, crop_size, angle):
 
     flip = random.random() > 0.5
     rotate = random.random() > 0.5
-    if angle > 0:
-        angle = random.randrange(0,365,angle) # step corresponds to angles of angle-deg increments
+
+    if angle != 0:
+        angle = random.randrange(0, 365, angle)
 
     return {'crop_pos': (x, y), 'flip': flip, 'rotate':rotate, 'angle':angle}
  
@@ -43,7 +42,7 @@ def get_rotation(params, rotate=True):
     return transforms.Compose(transform_list)
 
 
-def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC, flip=True, crop=True, totensor=True):
+def get_transform(params, resize_size, crop_size, method=Image.BICUBIC, flip=True, crop=True, totensor=True):
     transform_list = []
     transform_list.append(transforms.Lambda(lambda img: __scale(img, crop_size, method)))
 
@@ -51,6 +50,7 @@ def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC, flip=T
         transform_list.append(transforms.Lambda(lambda img: __flip(img, params['flip'])))
     if totensor:
         transform_list.append(transforms.ToTensor())
+
     return transforms.Compose(transform_list)
 
 
@@ -110,7 +110,7 @@ class EdgesDataset(torch.utils.data.Dataset):
     During test time, you need to prepare a directory '/path/to/data/test'.
     """
 
-    def __init__(self, dataroot, train=True, img_size=256, num_channels=3, random_crop=False, random_flip=True, rotate=False, angle=0):
+    def __init__(self, dataroot, train=True, img_size=256, random_crop=False, random_flip=True):
         """Initialize this dataset class.
         Parameters:
             opt (Option class) -- stores all the experiment flags; needs to be a subclass of BaseOptions
@@ -121,18 +121,17 @@ class EdgesDataset(torch.utils.data.Dataset):
             self.train_paths = make_dataset(self.train_dir) # get image paths
             self.AB_paths = sorted(self.train_paths)
         else:
+
             self.test_dir = os.path.join(dataroot, 'val')  # get the image directory
-            self.AB_paths = make_dataset(self.tesst_dir) # get image paths
+            
+            self.AB_paths = make_dataset(self.test_dir) # get image paths
             
         self.crop_size = img_size
         self.resize_size = img_size
-        self.num_channels = num_channels
+        self.mask = -1
         self.random_crop = random_crop
         self.random_flip = random_flip
-        self.rotate = rotate
-        self.angle = angle
         self.train = train
-        self.mask = -1
 
 
     def __getitem__(self, index):
@@ -145,27 +144,23 @@ class EdgesDataset(torch.utils.data.Dataset):
             A_paths (str) - - image paths
             B_paths (str) - - image paths (same as A_paths)
         """
-        # Read an image given a random integer index
+        # read a image given a random integer index
+
         AB_path = self.AB_paths[index]
-        if self.num_channels == 3:
-            AB = Image.open(AB_path).convert('RGB')
-        elif self.num_channels == 1:
-            AB = Image.open(AB_path).convert('L')
-        else:
-            raise NotImplementedError(f"Only num_channels == 1 or 3 supported.")
-        # Split AB image into A and B
+        AB = Image.open(AB_path).convert('RGB')
+        # split AB image into A and B
         w, h = AB.size
         w2 = int(w / 2)
         A = AB.crop((0, 0, w2, h))
         B = AB.crop((w2, 0, w, h))
 
         # apply the same transform to both A and B
-        params =  get_params(A.size, self.resize_size, self.crop_size, self.angle)
-        rotate_image = get_rotation(params, rotate=self.rotate)
-        transform_image = get_transform(params, self.resize_size, self.crop_size, crop =self.random_crop, flip=self.random_flip)
+        params = get_params(A.size, self.resize_size, self.crop_size)
 
-        A = transform_image(rotate_image(A))
-        B = transform_image(rotate_image(B))
+        transform_image = get_transform(params, self.resize_size, self.crop_size, crop=self.random_crop, flip=self.random_flip)
+
+        A = transform_image(A)
+        B = transform_image(B)
 
         if not self.train:
             return  B, A, index, AB_path, self.mask
@@ -287,7 +282,7 @@ class DIODE(torch.utils.data.Dataset):
         self.image_root = os.path.join(dataroot, 'train' if train else 'val')
         self.crop_size = img_size
         self.resize_size = img_size
-        
+        self.mask = -1
         self.random_crop = random_crop
         self.random_flip = random_flip
         self.train = train
@@ -347,9 +342,9 @@ class DIODE(torch.utils.data.Dataset):
 
         #     return image_tensor, data_dict
         if not self.train:
-            return img, cond, index, fn
+            return img, cond, index, fn, self.mask
         else:
-            return img, cond, index
+            return img, cond, index, self.mask
         
     def __len__(self):
         """Return the total number of images in the dataset."""
@@ -357,4 +352,5 @@ class DIODE(torch.utils.data.Dataset):
             return len(self.cache['img'])
         else:
             return len(self.filenames)
+    
     

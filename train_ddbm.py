@@ -24,6 +24,40 @@ from ddbm.script_util import (
 from ddbm.train_util import TrainLoop
 
 
+def create_argparser():
+    defaults = dict(
+        data_dir="",
+        dataset='edges2handbags',
+        schedule_sampler="uniform",
+        lr=1e-4,
+        weight_decay=0.0,
+        lr_anneal_steps=0,
+        global_batch_size=2048,
+        batch_size=-1,
+        microbatch=-1,  # -1 disables microbatches
+        ema_rate="0.9999",  # comma-separated list of EMA values
+        log_interval=500,
+        test_interval=500,
+        save_interval=10000,
+        save_interval_for_preemption=50000,
+        resume_checkpoint="",
+        exp='',
+        use_fp16=False,
+        fp16_scale_growth=1e-3,
+        debug=False,
+        num_workers=2,
+        use_augment=False,
+        g_equiv=False,
+        g_output="",
+        g_reg=False,
+    )
+    defaults.update(model_and_diffusion_defaults())
+    parser = argparse.ArgumentParser()
+    add_dict_to_argparser(parser, defaults)
+
+    return parser
+
+
 def main(args):
     # Profiler code 
     th.backends.cudnn.benchmark = True
@@ -105,38 +139,11 @@ def main(args):
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
         augment_pipe=augment,
+        g_equiv=args.g_equiv,
+        g_output=args.g_output,
+        g_reg=args.g_reg,
         **sample_defaults()
     ).run_loop()
-
-
-def create_argparser():
-    defaults = dict(
-        data_dir="",
-        dataset='edges2handbags',
-        schedule_sampler="uniform",
-        lr=1e-4,
-        weight_decay=0.0,
-        lr_anneal_steps=0,
-        global_batch_size=2048,
-        batch_size=-1,
-        microbatch=-1,  # -1 disables microbatches
-        ema_rate="0.9999",  # comma-separated list of EMA values
-        log_interval=50,
-        test_interval=500,
-        save_interval=10000,
-        save_interval_for_preemption=50000,
-        resume_checkpoint="",
-        exp='',
-        use_fp16=False,
-        fp16_scale_growth=1e-3,
-        debug=False,
-        num_workers=2,
-        use_augment=False
-    )
-    defaults.update(model_and_diffusion_defaults())
-    parser = argparse.ArgumentParser()
-    add_dict_to_argparser(parser, defaults)
-    return parser
 
 
 if __name__ == "__main__":

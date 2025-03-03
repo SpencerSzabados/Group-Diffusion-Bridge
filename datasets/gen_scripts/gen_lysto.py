@@ -1,9 +1,8 @@
 """
-    Date: 2023-12-24
-
     File contains scripts for generating LYSTO dataset (https://zenodo.org/records/3513571) 
     which contains various (native resolution 299x299 px) images of human cancer cells.
 """
+
 import os
 import re
 import h5py
@@ -17,10 +16,10 @@ from tqdm import tqdm
 
 
 # Data paramters 
-h5_data_dir = "/home/sszabados/datasets/lysto/"
+h5_data_dir = "/home/datasets/lysto/"
 h5_dataset_name = "test.h5"
-label_dir = "/home/sszabados/datasets/lysto/"
-data_dir = "/home/sszabados/datasets/lysto64_random_crop_ddbm/val/"
+label_dir = "/home/datasets/lysto/"
+data_dir = "/home/datasets/lysto64_random_crop_ddbm/val/"
 labels_name = "training_labels.csv"
 npy_dataset_name = "test_images.npy" 
 npy_labels_name = "test_labels.npy"
@@ -364,10 +363,9 @@ def sample_lysto(num_samples=10, num_classes=3):
 
 
 if __name__=="__main__":
-    # convert_h5_npy()
+    convert_h5_npy()
     gen_lysto_npy(resolution=128)
     gen_ddbm_lysto_random_crop_npy(resolution=64, aug_mul=1, scale=0.25, sigma=0)
-    # # convert_npy_JPG()
     convert_npy_PNG()
     gen_ddbm_lysto_right_crop(resolution=64)
     gen_ddbm_lysto_left_crop(resolution=64)

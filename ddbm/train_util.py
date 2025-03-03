@@ -19,10 +19,10 @@ from .fp16_util import (
     get_param_groups_and_shapes,
     make_master_params,
     master_params_to_model_params,
+    master_params_to_state_dict
 )
 import numpy as np
 from ddbm.script_util import NUM_CLASSES
-
 from ddbm.karras_diffusion import karras_sample
 
 import glob 
@@ -30,6 +30,7 @@ import glob
 # We found that the lg_loss_scale quickly climbed to
 # 20-21 within the first ~1K steps of training.
 INITIAL_LOG_LOSS_SCALE = 20.0
+
 
 class TrainLoop:
     def __init__(
@@ -56,6 +57,9 @@ class TrainLoop:
         lr_anneal_steps=0,
         total_training_steps=10000000,
         augment_pipe=None,
+        g_equiv=False,
+        g_output="",
+        g_reg=False,
         **sample_kwargs,
     ):
         self.model = model
@@ -84,12 +88,15 @@ class TrainLoop:
         self.lr_anneal_steps = lr_anneal_steps
         self.total_training_steps = total_training_steps
 
+        self.g_equiv = g_equiv
+        self.g_output = g_output
+        self.g_reg = g_reg
+
         self.step = 0
         self.resume_step = 0
         self.global_batch = self.batch_size * dist.get_world_size()
 
         self.sync_cuda = th.cuda.is_available()
-
 
         self._load_and_sync_parameters()
         self.mp_trainer = MixedPrecisionTrainer(
@@ -101,6 +108,26 @@ class TrainLoop:
         self.opt = RAdam(
             self.mp_trainer.master_params, lr=self.lr, weight_decay=self.weight_decay
         )
+
+        if self.g_reg:
+            print('Creating regularizing model...')
+            self.target_model = copy.deepcopy(self.model)
+            self.target_ema = self.ema_rate[0]
+
+            if self.resume_step:
+                self._load_and_sync_target_parameters()
+
+            self.target_model.requires_grad_(False)
+            self.target_model.eval()
+
+            if self.use_fp16:
+                self.target_model_param_groups_and_shapes = get_param_groups_and_shapes(
+                    self.target_model.named_parameters()
+                )
+                self.target_model_master_params = make_master_params(
+                    self.target_model_param_groups_and_shapes
+                )
+
         if self.resume_step:
             self._load_optimizer_state()
             # Model was resumed, either due to a restart or a checkpoint
@@ -211,26 +238,29 @@ class TrainLoop:
                     return
 
                 # scale to [-1, 1]
-                batch = self.preprocess(batch) # TODO: removed for testing 
+                batch = self.preprocess(batch) 
 
                 # Mask input if mask exists
-                if mask[0] != -1 and mask is not None:
+                if mask is not None and mask[0] != -1:
                     batch = batch*mask
                 
                 if self.augment is not None:
                     batch, _ = self.augment(batch)
+
                 if isinstance(cond, th.Tensor) and batch.ndim == cond.ndim:
-                    xT = self.preprocess(cond) # TODO: removed for testing
-                    # xT = cond
+                    xT = self.preprocess(cond) 
+ 
                     # Mask input if mask exists
-                    if mask[0] != -1 and mask is not None:
+                    if mask is not None and mask[0] != -1:
                         cond = xT*mask
+
                     cond = {'xT': xT}
                 else:
-                    cond['xT'] = self.preprocess(cond['xT']) # TODO: removed for testing
+                    cond['xT'] = self.preprocess(cond['xT'])
                     # cond['xT'] = cond['xT']
 
                 took_step = self.run_step(batch, cond, mask=mask)
+
                 if took_step and self.step % self.log_interval == 0:
                     logs = logger.dumpkvs()
                         
@@ -241,20 +271,20 @@ class TrainLoop:
                         return
 
                     test_batch, test_cond, _, mask = next(iter(self.test_data))
-                    test_batch = self.preprocess(test_batch) # TODO: removed for testing
+                    test_batch = self.preprocess(test_batch)
 
                     # Mask input if mask exists
-                    if mask[0] != -1 and mask is not None:
+                    if mask is not None and mask[0] != -1:
                         test_batch = test_batch*mask
              
                     if isinstance(test_cond, th.Tensor) and test_batch.ndim == test_cond.ndim:
-                        test_xT = self.preprocess(test_cond) # TODO: removed for testing
+                        test_xT = self.preprocess(test_cond) 
                         # test_xT = test_cond
-                        if mask[0] != -1 and mask is not None:
+                        if mask is not None and mask[0] != -1:
                             test_xT = test_xT*mask
                         test_cond = {'xT': test_xT}
                     else:
-                        test_cond['xT'] = self.preprocess(test_cond['xT']) # removed for testing
+                        test_cond['xT'] = self.preprocess(test_cond['xT']) 
                         # test_cond['xT'] = test_cond['xT']
 
                     self.run_test_step(test_batch, test_cond, mask)
@@ -262,10 +292,6 @@ class TrainLoop:
 
                 if took_step and self.step % self.save_interval_for_preemption == 0:
                     self.save(for_preemption=True)
-
-                if self.step%self.test_interval == 0 and self.step != 0:
-                    training = False
-                    break
 
         return self.step, self.ema_rate
         
@@ -275,20 +301,24 @@ class TrainLoop:
         if took_step:
             self.step += 1
             self._update_ema()
+
+            if self.g_reg:
+                self._update_target_ema()
+
         self._anneal_lr()
         self.log_step()
+
         return took_step
 
     def run_test_step(self, batch, cond, mask):
         with th.no_grad():
             self.forward_backward(batch, cond, mask=mask, train=False)
 
-    # TODO: make dice and dice_tol arguments rather than hard coded values
-    def forward_backward(self, batch, cond, mask=None, dice_weight=1, dice_tol=0.5, train=True):
+    def forward_backward(self, batch, cond, mask=None, train=True):
         if train:
             self.mp_trainer.zero_grad()
 
-        if mask[0] != -1 and mask is not None:
+        if mask is not None and mask[0] != -1:
             mask = mask.to(dist_util.dev())
 
         for i in range(0, batch.shape[0], self.microbatch):
@@ -299,9 +329,7 @@ class TrainLoop:
             }
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
-
-
-
+            
             compute_losses = functools.partial(
                 self.diffusion.training_bridge_losses,
                 self.ddp_model,
@@ -309,8 +337,9 @@ class TrainLoop:
                 t,
                 model_kwargs=micro_cond,
                 mask=mask,
-                dice_weight=dice_weight,
-                dice_tol=dice_tol
+                target_model=self.target_model if self.g_reg else None,
+                g_output=self.g_output,
+                g_reg=self.g_reg,
                 )
 
             if last_batch or not self.use_ddp:
@@ -334,6 +363,25 @@ class TrainLoop:
     def _update_ema(self):
         for rate, params in zip(self.ema_rate, self.ema_params):
             update_ema(params, self.mp_trainer.master_params, rate=rate)
+
+    def _update_target_ema(self):
+        with th.no_grad():
+            if self.use_fp16:
+                update_ema(
+                    self.target_model_master_params,
+                    self.mp_trainer.master_params,
+                    rate=self.target_ema,
+                )
+                master_params_to_model_params(
+                    self.target_model_param_groups_and_shapes,
+                    self.target_model_master_params,
+                )
+            else:
+                update_ema(
+                    list(self.target_model.parameters()),
+                    self.mp_trainer.master_params,
+                    rate=self.target_ema,
+                )
 
     def _anneal_lr(self):
         if not self.lr_anneal_steps:
@@ -386,6 +434,17 @@ class TrainLoop:
                 "wb",
             ) as f:
                 th.save(self.opt.state_dict(), f)
+
+            if self.g_reg:
+                logger.log("Saving target model state")
+                filename = f"target_model_{self.step:06d}.pt"
+
+                state_dict = master_params_to_state_dict(self.target_model, self.target_model_param_groups_and_shapes, \
+                    self.target_model_master_params, self.use_fp16)
+
+                with bf.BlobFile(bf.join(get_blob_logdir(), filename), "wb") as f:
+                    th.save(state_dict, f)
+                    # th.save(self.target_model.state_dict(), f)
 
         # Save model parameters last to prevent race conditions where a restart
         # loads model at step N, but opt/ema state isn't saved for step N.

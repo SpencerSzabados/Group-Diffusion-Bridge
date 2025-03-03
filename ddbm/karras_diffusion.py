@@ -1,26 +1,80 @@
-"""
-Based on: https://github.com/crowsonkb/k-diffusion
-"""
-
 import numpy as np
 import torch as th
-import torch.nn as nn
-import torch.nn.functional as F
-import torchvision
-from piq import LPIPS
-
 from .nn import mean_flat, append_dims, append_zero
-
 from functools import partial
+
+
+def xflip(x):
+    return th.flip(x, [-1])
+
+
+def vflip(x):
+    return th.flip(x, [-2])
 
 
 def vp_logsnr(t, beta_d, beta_min):
     t = th.as_tensor(t)
     return - th.log((0.5 * beta_d * (t ** 2) + beta_min * t).exp() - 1)
-    
+
+
 def vp_logs(t, beta_d, beta_min):
     t = th.as_tensor(t)
     return -0.25 * t ** 2 * (beta_d) - 0.5 * t * beta_min
+
+
+def get_reg_pair(g_output):
+    if len(g_output.split('_')) > 1:
+        g_output, suffix = g_output.split('_')
+    else:
+        suffix = None
+
+    if g_output == 'H':
+        @th.no_grad()
+        def aug_op(x):
+            return th.flip(x, [-1])
+
+        @th.no_grad()
+        def aug_op_inv(x):
+            return th.flip(x, [-1])
+
+    elif g_output == 'V':
+        @th.no_grad()
+        def aug_op(x):
+            return th.flip(x, [-2])
+        
+        @th.no_grad()
+        def aug_op_inv(x):
+            return th.flip(x, [-2])
+        
+    elif g_output == 'C4':
+        k = np.random.randint(1,4)
+
+        @th.no_grad()
+        def aug_op(x):
+            return th.rot90(x, k = k, dims = [-1, -2])
+        
+        @th.no_grad()
+        def aug_op_inv(x):
+            return th.rot90(x, k = k, dims = [-2, -1])
+        
+    elif g_output == 'D4':
+        k = np.random.randint(0, 4)
+        v_flip = np.random.randint(0, 2)
+
+        @th.no_grad()
+        def aug_op(x):
+            return th.rot90(th.flip(x, [-2]) if v_flip else x, k = k, dims = [-1, -2])
+        
+        @th.no_grad()
+        def aug_op_inv(x):
+            x_ = th.rot90(x, k = k, dims = [-2, -1])
+            return th.flip(x_, [-2]) if v_flip else x_
+
+    else:
+        raise NotImplementedError
+
+    return aug_op, aug_op_inv
+
 
 class KarrasDenoiser:
     def __init__(
@@ -35,7 +89,6 @@ class KarrasDenoiser:
         image_size=64,
         weight_schedule="karras",
         pred_mode='both',
-        loss_norm="lpips",
         clip_denoised=True
     ):
         self.sigma_data = sigma_data
@@ -45,14 +98,9 @@ class KarrasDenoiser:
         self.beta_min = beta_min
         self.sigma_data_end = self.sigma_data
         self.cov_xy = cov_xy
-            
         self.c = 1
-
         self.weight_schedule = weight_schedule
         self.pred_mode = pred_mode
-        self.loss_norm = loss_norm
-        if loss_norm == "lpips":
-            self.lpips_loss = LPIPS(replace_pooling=True, reduction="none")
         self.rho = rho
         self.num_timesteps = 40
         self.image_size = image_size
@@ -147,30 +195,32 @@ class KarrasDenoiser:
             return c_skip, c_out, c_in
         
 
-    def training_bridge_losses(self, model, x_start, sigmas, model_kwargs=None, noise=None, vae=None, mask=None, dice_weight=0, dice_tol=0):
+    def training_bridge_losses(self, model, x_start, sigmas, model_kwargs=None, noise=None, mask=None, target_model=None, g_output="", g_reg=False):
         
         assert model_kwargs is not None
-        
+
         if noise is None:
             noise = th.randn_like(x_start) 
         sigmas =th.minimum(sigmas, th.ones_like(sigmas)* self.sigma_max)
         terms = {}
         dims = x_start.ndim
 
-        if mask[0] != -1 and mask is not None:
-            # noise = noise*mask
-            model_kwargs['xT'] =  model_kwargs['xT']*mask
+        if mask is not None and mask[0] != -1:
+            noise = noise*mask
+            model_kwargs['xT'] = model_kwargs['xT']*mask
             x_start = x_start*mask
 
         xT = model_kwargs['xT']
 
         def bridge_sample(x0, xT, t):
             t = append_dims(t, dims)
+
             # std_t = th.sqrt(t)* th.sqrt(1 - t / self.sigma_max)
             if self.pred_mode.startswith('ve'):
                 std_t = t* th.sqrt(1 - t**2 / self.sigma_max**2)
                 mu_t= t**2 / self.sigma_max**2 * xT + (1 - t**2 / self.sigma_max**2) * x0
                 samples = (mu_t +  std_t * noise )
+
             elif self.pred_mode.startswith('vp'):
                 logsnr_t = vp_logsnr(t, self.beta_d, self.beta_min)
                 logsnr_T = vp_logsnr(self.sigma_max, self.beta_d, self.beta_min)
@@ -182,51 +232,47 @@ class KarrasDenoiser:
                 std_t = (-th.expm1(logsnr_T - logsnr_t)).sqrt() * (logs_t - logsnr_t/2).exp()
                 
                 samples= a_t * xT + b_t * x0 + std_t * noise
-
+               
             return samples
         
         x_t = bridge_sample(x_start, xT, sigmas)
 
-        if mask[0] != -1 and mask is not None:
+        if mask is not None and mask[0] != -1:
             x_t = x_t*mask
 
         model_output, denoised = self.denoise(model, x_t, sigmas,  **model_kwargs)
 
-        # if self.clip_denoised:
-            # denoised = denoised.clamp(-1, 1)
-
-        if mask[0] != -1 and mask is not None:
+        if mask is not None and mask[0] != -1:
             model_output = model_output*mask
             denoised = denoised*mask
 
-        # Compute DICE regularization loss term 
-            # Added DICE++ loss and softmax thresholding 
-        dice_loss = 0
-        if dice_weight > 0:
-            norm_denoised = denoised.clamp(0,1)
-            norm_x_start = x_start.clamp(0,1)
-            # dice_loss = 1. - 2.*mean_flat(norm_denoised*norm_x_start+1e-8)/(mean_flat(norm_denoised)+mean_flat(norm_x_start)+1e-8)
-            dice_loss = 1. - 2.*mean_flat(denoised*x_start)/(mean_flat(denoised)+mean_flat(x_start)+1e-8)
+        inv_aug_model_output = None
+        if g_reg and target_model is not None:
+            target_model.eval()
+            with th.no_grad():
+                aug_op, aug_op_inv = get_reg_pair(g_output)
+                aug_x_t = aug_op(x_t)                
+                model_kwargs['xT'] = aug_op(model_kwargs['xT']) 
 
-        # TODO: Remote - code only for debugging DICE loss.
-        # th.set_printoptions(threshold=10000)
-        # print(denoised[0])
-        # print(x_start[0])
-        # print((norm_denoised*norm_x_start)[0])
-        # gathered = th.cat((xT, x_start, denoised, norm_denoised, (norm_denoised>=0.5).float()),0)
-        # grid_img = torchvision.utils.make_grid(gathered, nrow=len(x_start), normalize=False)
-        # torchvision.utils.save_image(grid_img, f'tmp_imgs/debug_dice.pdf')
+                aug_model_output, aug_denoised = self.denoise(target_model, aug_x_t, sigmas, **model_kwargs)
+
+                inv_aug_model_output = aug_op_inv(aug_model_output.detach())
 
         weights = self.get_weightings(sigmas)
-        weights = append_dims((weights), dims)
+        weights =  append_dims((weights), dims)
+
         terms["xs_mse"] = mean_flat((denoised - x_start) ** 2)
         terms["mse"] = mean_flat(weights * (denoised - x_start) ** 2)
-        terms["dice"] = dice_loss
 
-        if "vb" in terms:
-            terms["loss"] = terms['mse'] + terms["vb"] + dice_weight*terms["dice"]
+        if inv_aug_model_output is not None:
+            tiny_noise = th.randn_like(inv_aug_model_output) * 0.01
+            inv_aug_model_output = inv_aug_model_output + tiny_noise
+
+            terms["mse_inv"] = mean_flat((model_output - inv_aug_model_output) ** 2)
+            terms["loss"] = terms["mse"] +  terms["mse_inv"]
         else:
-            terms["loss"] = terms['mse'] + dice_weight*terms["dice"]
+            terms["loss"] = terms["mse"]
+
         return terms
     
 
@@ -239,6 +285,7 @@ class KarrasDenoiser:
         rescaled_t = 1000 * 0.25 * th.log(sigmas + 1e-44)
         model_output = model(c_in * x_t, rescaled_t, **model_kwargs)
         denoised = c_out * model_output + c_skip * x_t
+
         return model_output, denoised
 
 
@@ -254,16 +301,17 @@ def karras_sample(
     model_kwargs=None,
     device=None,
     sigma_min=0.002,
-    sigma_max=80,  # higher for highres?
+    sigma_max=80, 
     rho=7.0,
     sampler="heun",
     churn_step_ratio=0.,
     guidance=1,
+    g_equiv=False,
+    g_output="",
 ):
     assert sampler in ["heun", ], 'only heun sampler is supported currently'
     
     sigmas = get_sigmas_karras(steps, sigma_min, sigma_max-1e-4, rho, device=device)
-
 
     sample_fn = {
         "heun": partial(sample_heun, beta_d=diffusion.beta_d, beta_min=diffusion.beta_min),
@@ -272,9 +320,64 @@ def karras_sample(
     sampler_args = dict(
             pred_mode=diffusion.pred_mode, churn_step_ratio=churn_step_ratio, sigma_max=sigma_max
         )
-    def denoiser(x_t, sigma, x_T=None):
-        _, denoised = diffusion.denoise(model, x_t, sigma, **model_kwargs)
+    
+    def denoiser(x_t, sigma, x_T=None, g_output=""):
+        if len(g_output.split('_')) > 1:
+            g_output, suffix = g_output.split('_')
+        else:
+            suffix = None
+
+        if g_output == "":
+            _, denoised = diffusion.denoise(model, x_t, sigma, **model_kwargs)
         
+        elif g_output == "V":
+            _, denoised = diffusion.denoise(model, x_t, sigma, **model_kwargs)
+
+            model_kwargs_ = {'xT': xflip(model_kwargs['xT'])}
+            _, denoisedF = diffusion.denoise(model, xflip(x_t), sigma, **model_kwargs_)
+                    
+            denoised = (denoised + xflip(denoisedF))/2
+        
+        elif g_output == "H":
+            _, denoised = diffusion.denoise(model, x_t, sigma, **model_kwargs)
+
+            model_kwargs_ = {'xT': vflip(model_kwargs['xT'])}
+            _, denoised_f = diffusion.denoise(model, vflip(x_t), sigma, **model_kwargs_)
+                    
+            denoised = (denoised + vflip(denoised_f))/2
+        
+        elif g_output == "C4":
+            denoised = th.zeros_like(x_t)
+            for i in range(4):
+                xT_r = th.rot90(model_kwargs['xT'], i, [-1, -2])
+                x_t_r = th.rot90(x_t, i, [-1,-2])
+
+                model_kwargs_r = {'xT': xT_r}
+                _, denoised_r = diffusion.denoise(model, x_t_r, sigma, **model_kwargs_r)
+
+                denoised += th.rot90(denoised_r, -i, [-1,-2])
+            denoised = denoised/4.0
+        
+        elif g_output == "D4":
+            denoised = th.zeros_like(x_t)
+            for i in range(4):
+                xT_r = th.rot90(model_kwargs['xT'], i, [-1, -2])
+                x_t_r = th.rot90(x_t, i, [-1,-2])
+
+                xT_r_f = xflip(xT_r)
+                x_t_r_f = xflip(x_t_r)
+
+                model_kwargs_r = {'xT': xT_r}
+                _, denoised_r = diffusion.denoise(model, x_t_r, sigma, **model_kwargs_r)
+
+                model_kwargs_r_f = {'xT': xT_r_f}
+                _, denoised_r_f = diffusion.denoise(model, x_t_r_f, sigma, **model_kwargs_r_f)
+
+                denoised = denoised \
+                            + th.rot90(denoised_r, -i, [-1,-2]) \
+                            + th.rot90(xflip(denoised_r_f), -i, [-1,-2])
+            denoised = denoised/8.0
+
         if clip_denoised:
             denoised = denoised.clamp(-1, 1)
                 
@@ -284,13 +387,19 @@ def karras_sample(
         denoiser,
         x_T,
         sigmas,
+        g_output=g_output,
         progress=progress,
         callback=callback,
         guidance=guidance,
         **sampler_args,
     )
 
-    return x_0.clamp(-1, 1), [x.clamp(-1, 1) for x in path], nfe
+    if clip_denoised:
+        x_0, x, nfe = x_0.clamp(-1, 1), [x.clamp(-1, 1) for x in path], nfe
+    else:
+        x_0, x, nfe = x_0, [x for x in path], nfe
+
+    return x_0, x, nfe
 
 
 def get_sigmas_karras(n, sigma_min, sigma_max, rho=7.0, device="cpu"):
@@ -361,6 +470,7 @@ def sample_heun(
     beta_min=0.1,
     churn_step_ratio=0.,
     guidance=1,
+    g_output="",
 ):
     """Implements Algorithm 2 (Heun steps) from Karras et al. (2022)."""
     x_T = x
@@ -397,7 +507,7 @@ def sample_heun(
             # 1 step euler
             sigma_hat = (sigmas[i+1] - sigmas[i]) * churn_step_ratio + sigmas[i]
             
-            denoised = denoiser(x, sigmas[i] * s_in, x_T)
+            denoised = denoiser(x, sigmas[i] * s_in, x_T, g_output=g_output)
             if pred_mode == 've':
                 d_1, gt2 = to_d(x, sigmas[i] , denoised, x_T, sigma_max,  w=guidance, stochastic=True)
             elif pred_mode.startswith('vp'):
@@ -413,7 +523,7 @@ def sample_heun(
             sigma_hat =  sigmas[i]
         
         # heun step
-        denoised = denoiser(x, sigma_hat * s_in, x_T)
+        denoised = denoiser(x, sigma_hat * s_in, x_T, g_output=g_output)
         if pred_mode == 've':
             # d =  (x - denoised ) / append_dims(sigma_hat, x.ndim)
             d = to_d(x, sigma_hat, denoised, x_T, sigma_max, w=guidance)
@@ -439,7 +549,7 @@ def sample_heun(
         else:
             # Heun's method
             x_2 = x + d * dt
-            denoised_2 = denoiser(x_2, sigmas[i + 1] * s_in, x_T)
+            denoised_2 = denoiser(x_2, sigmas[i + 1] * s_in, x_T, g_output=g_output)
             if pred_mode == 've':
                 # d_2 =  (x_2 - denoised_2) / append_dims(sigmas[i + 1], x.ndim)
                 d_2 = to_d(x_2,  sigmas[i + 1], denoised_2, x_T, sigma_max, w=guidance)
@@ -452,8 +562,6 @@ def sample_heun(
             # noise = th.zeros_like(x) if 'flow' in pred_mode or pred_mode == 'uncond' else generator.randn_like(x)
             x = x + d_prime * dt #+ noise * (sigmas[i + 1]**2 - sigma_hat**2).abs() ** 0.5
             nfe += 1
-        # loss = (denoised.detach().cpu() - x0).pow(2).mean().item()
-        # losses.append(loss)
 
         path.append(x.detach().cpu())
         

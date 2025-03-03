@@ -208,26 +208,28 @@ def load_data(
       testset = DIODE(dataroot=root, train=False, img_size= image_size,
                                 random_crop=False, random_flip=False)
       
-  elif dataset == 'fives':
-    from .aligned_dataset import CircDataset
-    trainset = CircDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels,
-                            random_crop=False, random_flip=True, rotate=True, angle=90)
-    valset = CircDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels,
-                          random_crop=False, random_flip=False, rotate=True, angle=90)
-    if include_test:
-       testset = CircDataset(dataroot=root, train=False, img_size=image_size, num_channels=num_channels,
-                          random_crop=False, random_flip=False, rotate=True, angle=90)
-       
-  elif dataset == 'fives_patches':
+  elif dataset == 'lysto64':
     from .aligned_dataset import EdgesDataset
-    trainset = EdgesDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels,
-                                random_crop=True, random_flip=True, rotate=True, angle=90)
-    valset = EdgesDataset(dataroot=root, train=True, img_size=image_size, num_channels=num_channels,
-                                random_crop=False, random_flip=False, rotate=True, angle=90)
-    if include_test:
-      testset = EdgesDataset(dataroot=root, train=False, img_size=image_size, num_channels=num_channels,
-                                random_crop=False, random_flip=False, rotate=True, angle=90)
+    trainset = EdgesDataset(dataroot=root, train=True, img_size= image_size,
+                                random_crop=True, random_flip=True)
 
+    valset = EdgesDataset(dataroot=root, train=True, img_size= image_size,
+                                random_crop=False, random_flip=False)
+    if include_test:
+      testset = EdgesDataset(dataroot=root, train=False, img_size= image_size,
+                                random_crop=False, random_flip=False)
+  
+  elif dataset == 'ct_pet':
+    from .aligned_dataset import EdgesDataset
+    trainset = EdgesDataset(dataroot=root, train=True, img_size= image_size,
+                                random_crop=True, random_flip=True)
+
+    valset = EdgesDataset(dataroot=root, train=True, img_size= image_size,
+                                random_crop=False, random_flip=False)
+    if include_test:
+      testset = EdgesDataset(dataroot=root, train=False, img_size= image_size,
+                                random_crop=False, random_flip=False)
+       
   loader = DataLoader(
       dataset=trainset, num_workers=num_workers, pin_memory=True,
       batch_sampler=DistInfiniteBatchSampler(

@@ -5,12 +5,10 @@ numpy array. This can be used to produce samples for FID evaluation.
 
 import argparse
 import os
-
 import numpy as np
 import torch as th
 import torchvision.utils as vutils
 import torch.distributed as dist
-
 from ddbm import dist_util, logger
 from ddbm.script_util import (
     NUM_CLASSES,
@@ -21,31 +19,28 @@ from ddbm.script_util import (
 )
 from ddbm.random_util import get_generator
 from ddbm.karras_diffusion import karras_sample, forward_sample
-
 from datasets import load_data
-
 from pathlib import Path
-
 from PIL import Image
+
+
 def get_workdir(exp):
     workdir = f'./workdir/{exp}'
     return workdir
 
-def main():
-    args = create_argparser().parse_args()
 
+def main(args):
     workdir = os.path.dirname(args.model_path)
 
     ## assume ema ckpt format: ema_{rate}_{steps}.pt
     split = args.model_path.split("_")
     step = int(split[-1].split(".")[0])
     sample_dir = Path(workdir)/f'sample_{step}/w={args.guidance}_churn={args.churn_step_ratio}'
+    
     dist_util.setup_dist()
-    if dist.get_rank() == 0:
-
-        sample_dir.mkdir(parents=True, exist_ok=True)
     logger.configure(dir=workdir)
-
+    if dist.get_rank() == 0:
+        sample_dir.mkdir(parents=True, exist_ok=True)
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(
@@ -62,10 +57,8 @@ def main():
 
     logger.log("sampling...")
     
-
     all_images = []
     
-
     all_dataloaders = load_data(
         data_dir=args.data_dir,
         dataset=args.dataset,
@@ -83,8 +76,6 @@ def main():
         raise NotImplementedError
     args.num_samples = len(dataloader.dataset)
 
-
-    
     for i, data in enumerate(dataloader):
         
         x0_image = data[0]
@@ -97,8 +88,6 @@ def main():
         model_kwargs = {'xT': y0}
         index = data[2].to(dist_util.dev())
             
-            
-                
         sample, path, nfe = karras_sample(
             diffusion,
             model,
@@ -113,13 +102,17 @@ def main():
             sigma_max=diffusion.sigma_max,
             churn_step_ratio=args.churn_step_ratio,
             rho=args.rho,
-            guidance=args.guidance
+            guidance=args.guidance,
+            g_equiv=args.g_equiv,
+            g_output=args.g_output
         )
         
-
         sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)
         sample = sample.permute(0, 2, 3, 1)
         sample = sample.contiguous()
+
+        print(sample)
+        exit()
         
         gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
         dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
@@ -139,13 +132,10 @@ def main():
                 vutils.save_image(x0_image[:num_display], f'{sample_dir}/x_{i}.png',nrow=int(np.sqrt(num_display)))
             vutils.save_image(y0_image[:num_display]/2+0.5, f'{sample_dir}/y_{i}.png',nrow=int(np.sqrt(num_display)))
             
-            
         all_images.append(gathered_samples.detach().cpu().numpy())
-        
         
     logger.log(f"created {len(all_images) * args.batch_size * dist.get_world_size()} samples")
         
-
     arr = np.concatenate(all_images, axis=0)
     arr = arr[:args.num_samples]
     
@@ -178,6 +168,8 @@ def create_argparser():
         upscale=False,
         num_workers=2,
         guidance=1.,
+        g_equiv=False,
+        g_output=""
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()
@@ -186,4 +178,5 @@ def create_argparser():
 
 
 if __name__ == "__main__":
-    main()
+    args = create_argparser().parse_args()
+    main(args)

@@ -12,4 +12,6 @@ docker build -t group-diffusion-bridge:latest /Group-Diffusion-Bridge/docker/Doc
 ######################################################################################
 # Command to create container from existing image with gpu access and mounted drives #
 ######################################################################################
-docker container run --gpus device=all  --shm-size 24GB --restart=always -it -d  -v /home/sszabados/Group-Diffusion-Bridge/:/home/Group-Diffusion-Bridge -v /home/sszabados/datasets:/home/datasets -v /home/sszabados/checkpoints:/home/checkpoints group-diffusion-bridge /bin/bash
+docker container run --gpus device=all  --shm-size 24GB --restart=always -it -d  -v /home/Group-Diffusion-Bridge/:/home/Group-Diffusion-Bridge -v /home/datasets:/home/datasets -v /home/checkpoints:/home/checkpoints group-diffusion-bridge /bin/bash
+
+docker container run --gpus device=all  --shm-size 24GB --restart=always -it -d  -v /home/Group-Diffusion-Bridge/:/home/Group-Diffusion-Bridge -v /home/datasets:/home/datasets -v /home/checkpoints:/home/checkpoints group-diffusion-bridge /bin/bash

@@ -12,7 +12,6 @@ In recent years, diffusion models have risen to prominence as the foremost techn
 # Useage
 There exists two primary branches two this repository: 'main' contains all the code for the central (pixel-space) model used for all benchmarks at low resolutions $(h\times w < 128\times 128)$, 'vqgan-model' contains the code for the latent space diffusion model based around Stable Diffusion's VAE used for high resolutions tasks $(h\times w > 128\times 128)$. See the repository [Fine-tuning Stable Diffusions VAE](https://github.com/SpencerSzabados/Fine-tune-Stable-Diffusion-VAE) for more details about how exactly the VAE was fine-tuned, and how the replicate the results yourself.
 
-
 ## Environment setup
 We include a [Docker](https://www.docker.com/) buildfile in '/Group-Diffusion-Bridge/docker' that builds a suitable environment for running all the code by simply running the following docker command (which is also listed in '/Group-Diffusion-Bridge/docker/run_container.sh'). This docker image should download the latest version of the diffusion model code from this repository.
 
